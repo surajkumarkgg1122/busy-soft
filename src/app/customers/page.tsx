@@ -6,8 +6,9 @@ import Sidebar from "../Components/Sidebar/page";
 import TopNav from "../Components/TopNav/page";
 import AuthGate from "../Components/Auth/AuthGate";
 import { firestoreDb } from "../../lib/firebase";
+import { useBusiness } from "../../context/BusinessContext";
 
-type Customer = { id: string; name?: string; phone?: string; email?: string; address?: string; gstType?: string; state?: string; balance?: number; customerId?: string };
+type Customer = { id: string; name?: string; phone?: string; email?: string; address?: string; gstType?: string; state?: string; balance?: number; customerId?: string; customerCode?: string; type?: string; status?: string };
 type FormValues = { name: string; phone: string; email: string; address: string; gstType: string; state: string; balance: string };
 const emptyForm: FormValues = { name: "", phone: "", email: "", address: "", gstType: "Unregistered/Consumer", state: "", balance: "" };
 
@@ -16,6 +17,7 @@ const PlusIcon = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor
 const PeopleIcon = () => <svg viewBox="0 0 120 104" fill="none" aria-hidden="true"><path d="M23 91V72c0-9 8-16 17-16h10c9 0 17 7 17 16v19" fill="#F6C78F" stroke="#5B6470" strokeWidth="4"/><circle cx="45" cy="43" r="13" fill="#F6CFA6" stroke="#5B6470" strokeWidth="4"/><path d="M32 41c1-13 24-17 26 0" stroke="#5B6470" strokeWidth="4"/><path d="M70 89V54c0-11 9-20 20-20h10c11 0 20 9 20 20v35" fill="#A9D3F5" stroke="#5B6470" strokeWidth="4"/><circle cx="95" cy="24" r="13" fill="#F6CFA6" stroke="#5B6470" strokeWidth="4"/><path d="M82 23c1-13 24-17 26 0" stroke="#5B6470" strokeWidth="4"/><path d="M45 98V70c0-13 10-23 23-23h12c13 0 23 10 23 23v28" fill="#F4F7FA" stroke="#5B6470" strokeWidth="4"/><circle cx="74" cy="39" r="16" fill="#F6CFA6" stroke="#5B6470" strokeWidth="4"/><path d="M58 38c1-14 29-18 32 0" stroke="#5B6470" strokeWidth="4"/><path d="M65 68v28M84 68v28" stroke="#5B6470" strokeWidth="4"/></svg>;
 
 export default function CustomersPage() {
+  const { activeBusinessId, loading: businessLoading } = useBusiness();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -26,12 +28,26 @@ export default function CustomersPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => { async function load() {
-    if (!firestoreDb) { setError("Firebase is not configured. Check your .env.local file."); setLoading(false); return; }
-    try { const snapshot = await getDocs(collection(firestoreDb, "customers")); const data = snapshot.docs.map((item) => ({ id: item.id, ...item.data() })) as Customer[]; setCustomers(data); setSelectedId(data[0]?.id ?? null); }
-    catch (reason) { console.error(reason); setError("Could not load customers. Enable Firestore and check its rules."); }
-    finally { setLoading(false); }
-  } load(); }, []);
+  useEffect(() => {
+    async function load() {
+      if (businessLoading) return;
+      if (!firestoreDb) { setError("Firebase is not configured. Check your .env.local file."); setLoading(false); return; }
+      if (!activeBusinessId) { setCustomers([]); setSelectedId(null); setError("Create or select a business before managing customers."); setLoading(false); return; }
+
+      setLoading(true);
+      setError("");
+      try {
+        const snapshot = await getDocs(collection(firestoreDb, "businesses", activeBusinessId, "customers"));
+        const data = snapshot.docs.map((item) => ({ id: item.id, ...item.data() })) as Customer[];
+        setCustomers(data);
+        setSelectedId(data[0]?.id ?? null);
+      } catch (reason) {
+        console.error(reason);
+        setError("Could not load customers. Check Firestore rules and your business membership.");
+      } finally { setLoading(false); }
+    }
+    load();
+  }, [activeBusinessId, businessLoading]);
 
   const filtered = useMemo(() => customers.filter((customer) => [customer.name, customer.phone, customer.email].join(" ").toLowerCase().includes(query.toLowerCase())), [customers, query]);
   const selected = customers.find((customer) => customer.id === selectedId) ?? filtered[0];
@@ -39,25 +55,45 @@ export default function CustomersPage() {
   const openAdd = () => { setForm(emptyForm); setActiveTab("address"); setError(""); setShowForm(true); };
 
   async function save(event: React.FormEvent<HTMLFormElement>, keepOpen = false) {
-    event.preventDefault(); if (!firestoreDb) return; setSaving(true); setError("");
+    event.preventDefault();
+    if (!firestoreDb || !activeBusinessId) { setError("Select a business before saving a customer."); return; }
+    setSaving(true); setError("");
     try {
-      const values = { ...form, balance: Number(form.balance) || 0, type: "Customer", status: "Active", customerId: `PTY-${String(customers.length + 1001).padStart(4, "0")}`, createdAt: serverTimestamp() };
-      const saved = await addDoc(collection(firestoreDb, "customers"), values);
-      setCustomers((now) => [...now, { ...values, id: saved.id }]); setSelectedId(saved.id);
+      const values = {
+        ...form,
+        balance: Number(form.balance) || 0,
+        type: "Customer",
+        status: "Active",
+        customerCode: `CUS-${Date.now().toString().slice(-8)}`,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      const saved = await addDoc(collection(firestoreDb, "businesses", activeBusinessId, "customers"), values);
+      const nextCustomer = { ...values, id: saved.id } as Customer;
+      setCustomers((now) => [...now, nextCustomer]); setSelectedId(saved.id);
       if (keepOpen) setForm(emptyForm); else setShowForm(false);
     } catch (reason) { console.error(reason); setError("Could not save customer. Check Firestore rules and try again."); }
     finally { setSaving(false); }
   }
+
   async function removeSelected() {
-    if (!selected || !firestoreDb || !window.confirm(`Delete ${selected.name || "this customer"}? This cannot be undone.`)) return;
-    await deleteDoc(doc(firestoreDb, "customers", selected.id)); setCustomers((now) => now.filter((item) => item.id !== selected.id)); setSelectedId(null);
+    if (!selected || !firestoreDb || !activeBusinessId || !window.confirm(`Delete ${selected.name || "this customer"}? This cannot be undone.`)) return;
+    try {
+      await deleteDoc(doc(firestoreDb, "businesses", activeBusinessId, "customers", selected.id));
+      setCustomers((now) => now.filter((item) => item.id !== selected.id));
+      const remaining = customers.filter((item) => item.id !== selected.id);
+      setSelectedId(remaining[0]?.id ?? null);
+    } catch (reason) {
+      console.error(reason);
+      setError("Could not delete customer. Check your permissions and try again.");
+    }
   }
 
   return <AuthGate><div className="flex min-h-screen bg-[#f5f7fa]"><Sidebar /><main className="min-w-0 flex-1 px-4 pb-6 pt-0 sm:px-6 lg:px-8"><TopNav /><div className="mx-auto max-w-[1500px]">
-    <div className="mb-4 flex items-center justify-between border-b-2 border-[#1f9fd3] pb-3"><h1 className="text-base font-bold uppercase tracking-wide text-[#2aa5d5]">Customers</h1><button type="button" onClick={openAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#f5a229] px-4 text-sm font-semibold text-white shadow-sm hover:bg-[#df8e18]"><span className="h-4 w-4"><PlusIcon /></span>Add customer</button></div>
+    <div className="mb-4 flex items-center justify-between border-b-2 border-[#1f9fd3] pb-3"><div><h1 className="text-base font-bold uppercase tracking-wide text-[#2aa5d5]">Customers</h1><p className="mt-1 text-xs text-[#98a2b3]">Business-isolated customer records</p></div><button type="button" onClick={openAdd} disabled={!activeBusinessId} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#f5a229] px-4 text-sm font-semibold text-white shadow-sm hover:bg-[#df8e18] disabled:cursor-not-allowed disabled:opacity-50"><span className="h-4 w-4"><PlusIcon /></span>Add customer</button></div>
     {error && <div role="alert" className="mb-4 rounded-lg border border-[#fecdca] bg-[#fef3f2] px-4 py-3 text-sm text-[#b42318]">{error}</div>}
-    {loading ? <div className="rounded-lg bg-white p-16 text-center text-sm text-[#667085] shadow-sm">Loading customers…</div> : customers.length === 0 ? <section className="flex min-h-[560px] flex-col items-center justify-center rounded-lg border border-[#d9e0e8] bg-white px-5 text-center shadow-sm"><div className="mb-5 h-36 w-40 rounded-[45%] bg-[#edf7ff] p-3"><PeopleIcon /></div><p className="text-base text-[#747b8b]">Add your customers &amp; suppliers. Manage your business with them.</p><button type="button" onClick={openAdd} className="mt-6 rounded bg-[#f5a229] px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-[#df8e18]">Add Your First Customer</button></section> : <section className="grid min-h-[560px] gap-2 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <aside className="rounded-lg border border-[#d9e0e8] bg-white p-3 shadow-sm"><div className="mb-4 rounded-lg border border-[#e7eaef] p-3"><p className="font-semibold text-[#394150]">Import Customers</p><p className="mt-1 text-xs leading-5 text-[#8a94a5]">Use contacts from your phone or Gmail to create customers.</p></div><div className="mb-4 flex items-center justify-between"><label className="flex h-9 w-9 items-center justify-center rounded-full bg-[#eff1f4] text-[#555d67]"><span className="h-4 w-4"><SearchIcon /></span><input value={query} onChange={(event) => setQuery(event.target.value)} className="sr-only" aria-label="Search customers" /></label><button type="button" onClick={openAdd} className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#f5a229] px-3 text-sm font-semibold text-white shadow-sm"><span className="h-4 w-4"><PlusIcon /></span>Add Customer</button></div><div className="grid grid-cols-[1fr_auto] border-b border-[#e5e7eb] px-1 pb-2 text-xs font-bold uppercase text-[#6d737c]"><span>Customer</span><span>Amount</span></div><div className="-mx-3 mt-1">{filtered.map((customer) => <button type="button" key={customer.id} onClick={() => setSelectedId(customer.id)} className={`grid w-full grid-cols-[1fr_auto] px-4 py-3 text-left text-sm transition ${selected?.id === customer.id ? "bg-[#d9f0fb]" : "hover:bg-[#f7fafc]"}`}><span className="truncate font-medium text-[#3c4552]">{customer.name || "Unnamed customer"}</span><span className="font-semibold text-[#00a878]">{Number(customer.balance || 0).toFixed(2)}</span></button>)}{filtered.length === 0 && <p className="p-5 text-center text-sm text-[#8a94a5]">No customers found</p>}</div></aside>
+    {businessLoading || loading ? <div className="rounded-lg bg-white p-16 text-center text-sm text-[#667085] shadow-sm">Loading customers…</div> : customers.length === 0 ? <section className="flex min-h-[560px] flex-col items-center justify-center rounded-lg border border-[#d9e0e8] bg-white px-5 text-center shadow-sm"><div className="mb-5 h-36 w-40 rounded-[45%] bg-[#edf7ff] p-3"><PeopleIcon /></div><p className="text-base text-[#747b8b]">Add your customers &amp; suppliers. Manage your business with them.</p><button type="button" onClick={openAdd} disabled={!activeBusinessId} className="mt-6 rounded bg-[#f5a229] px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-[#df8e18] disabled:opacity-50">Add Your First Customer</button></section> : <section className="grid min-h-[560px] gap-2 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <aside className="rounded-lg border border-[#d9e0e8] bg-white p-3 shadow-sm"><div className="mb-4 rounded-lg border border-[#e7eaef] p-3"><p className="font-semibold text-[#394150]">Import Customers</p><p className="mt-1 text-xs leading-5 text-[#8a94a5]">Use contacts from your phone or Gmail to create customers.</p></div><div className="mb-4 flex items-center justify-between"><label className="flex h-9 w-9 items-center justify-center rounded-full bg-[#eff1f4] text-[#555d67]"><span className="h-4 w-4"><SearchIcon /></span><input value={query} onChange={(event) => setQuery(event.target.value)} className="sr-only" aria-label="Search customers" /></label><button type="button" onClick={openAdd} disabled={!activeBusinessId} className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#f5a229] px-3 text-sm font-semibold text-white shadow-sm disabled:opacity-50"><span className="h-4 w-4"><PlusIcon /></span>Add Customer</button></div><div className="grid grid-cols-[1fr_auto] border-b border-[#e5e7eb] px-1 pb-2 text-xs font-bold uppercase text-[#6d737c]"><span>Customer</span><span>Amount</span></div><div className="-mx-3 mt-1">{filtered.map((customer) => <button type="button" key={customer.id} onClick={() => setSelectedId(customer.id)} className={`grid w-full grid-cols-[1fr_auto] px-4 py-3 text-left text-sm transition ${selected?.id === customer.id ? "bg-[#d9f0fb]" : "hover:bg-[#f7fafc]"}`}><span className="truncate font-medium text-[#3c4552]">{customer.name || "Unnamed customer"}</span><span className="font-semibold text-[#00a878]">{Number(customer.balance || 0).toFixed(2)}</span></button>)}{filtered.length === 0 && <p className="p-5 text-center text-sm text-[#8a94a5]">No customers found</p>}</div></aside>
       <article className="overflow-hidden rounded-lg border border-[#d9e0e8] bg-white shadow-sm"><div className="grid min-h-36 grid-cols-1 gap-3 border-b-[9px] border-[#f5f7fa] p-5 sm:grid-cols-2"><div><h2 className="text-sm font-bold uppercase text-[#3d4550]">{selected?.name || "Customer"}</h2><p className="mt-4 text-xs text-[#454b54]">PHONE: {selected?.phone || "—"}</p><p className="mt-3 text-xs text-[#454b54]">EMAIL: {selected?.email || "—"}</p></div><div className="text-left text-xs text-[#454b54] sm:text-right"><p>ADDRESS: {selected?.address || "—"}</p><p className="mt-4">GST TYPE: {selected?.gstType || "—"}</p><button type="button" onClick={removeSelected} className="mt-5 text-xs font-semibold text-[#d33] hover:underline">Delete customer</button></div></div><div className="p-5"><div className="mb-5 flex items-center justify-between"><h3 className="text-sm font-semibold text-[#3d4550]">TRANSACTIONS</h3><label className="relative"><span className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9aa1aa]"><SearchIcon /></span><input placeholder="Search" className="h-8 w-44 border border-[#d7dce2] pl-9 pr-2 text-sm outline-none focus:border-[#1f9fd3]" /></label></div><div className="overflow-x-auto"><table className="min-w-[620px] text-left"><thead className="border-y border-[#e3e6ea] text-xs font-semibold text-[#777d86]"><tr>{["Type", "Number", "Date", "Total", "Balance"].map((heading) => <th key={heading} className="px-3 py-3">{heading}</th>)}</tr></thead></table></div><p className="py-28 text-center text-sm text-[#565d66]">No transactions to show</p></div></article>
     </section>}
   </div></main></div>
