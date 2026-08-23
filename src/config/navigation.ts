@@ -34,9 +34,9 @@ export const navigation: NavigationItem[] = [
     icon: "sales",
     children: [
       { label: "Invoices", href: "/sales" },
-      { label: "Quotations", href: "/sales/quotations" },
-      { label: "Sales Orders", href: "/sales/orders" },
-      { label: "Sales Returns", href: "/sales/returns" },
+      { label: "Quotations", href: "/quotations" },
+      { label: "Sales Orders", href: "/sales-orders" },
+      { label: "Sales Returns", href: "/sales-returns" },
     ],
   },
   {
