@@ -51,8 +51,8 @@ export interface CreateBusinessInput {
   gstEnabled?: boolean;
 }
 
-const BusinessContext = createContext<BusinessContextValue | undefined>(undefined);
 const ACTIVE_BUSINESS_KEY = "erp.activeBusinessId";
+const TRIAL_DAYS = 14;
 
 async function ensureUserProfile(user: User) {
   if (!firestoreDb) return;
@@ -117,10 +117,8 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
 
       if (!businessSnapshot.exists()) continue;
 
-      loaded.push({
-        ...membership,
-        business: businessSnapshot.data() as Business,
-      });
+      const business = businessSnapshot.data() as Business;
+      loaded.push({ ...membership, business });
     }
 
     setMemberships(loaded);
@@ -179,6 +177,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     const membershipRef = doc(firestoreDb, "businesses", businessRef.id, "members", uid);
     const userMembershipRef = doc(firestoreDb, "users", uid, "businessMemberships", businessRef.id);
     const now = Timestamp.now();
+    const trialExpiresAt = Timestamp.fromMillis(now.toMillis() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
     const business: Business = {
       businessId: businessRef.id,
@@ -205,6 +204,12 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       currency: "INR",
       timezone: "Asia/Kolkata",
       ownerId: uid,
+      trial: {
+        status: "active",
+        planId: "trial",
+        startsAt: now,
+        expiresAt: trialExpiresAt,
+      },
       status: "active",
       createdAt: now,
       updatedAt: now,
