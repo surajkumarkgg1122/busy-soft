@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  setDoc,
   Timestamp,
   writeBatch,
 } from "firebase/firestore";
@@ -19,7 +20,7 @@ import {
 } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { firebaseAuth, firestoreDb } from "../lib/firebase";
-import type { Business, BusinessMember } from "../types";
+import type { AppUser, Business, BusinessMember } from "../types";
 
 interface BusinessMembership extends BusinessMember {
   business: Business;
@@ -52,6 +53,39 @@ export interface CreateBusinessInput {
 
 const BusinessContext = createContext<BusinessContextValue | undefined>(undefined);
 const ACTIVE_BUSINESS_KEY = "erp.activeBusinessId";
+
+async function ensureUserProfile(user: User) {
+  if (!firestoreDb) return;
+
+  const userRef = doc(firestoreDb, "users", user.uid);
+  const snapshot = await getDoc(userRef);
+  const now = Timestamp.now();
+
+  if (!snapshot.exists()) {
+    const profile: AppUser = {
+      uid: user.uid,
+      name: user.displayName?.trim() || user.email?.split("@")[0] || "User",
+      email: user.email || "",
+      phone: user.phoneNumber || "",
+      photoURL: user.photoURL || null,
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: now,
+    };
+    await setDoc(userRef, profile);
+    return;
+  }
+
+  await setDoc(userRef, {
+    name: user.displayName?.trim() || snapshot.data().name || user.email?.split("@")[0] || "User",
+    email: user.email || snapshot.data().email || "",
+    phone: user.phoneNumber || snapshot.data().phone || "",
+    photoURL: user.photoURL || snapshot.data().photoURL || null,
+    lastLoginAt: now,
+    updatedAt: now,
+  }, { merge: true });
+}
 
 export function BusinessProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -113,10 +147,12 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     return onAuthStateChanged(firebaseAuth, async (nextUser) => {
       setUser(nextUser);
       setLoading(true);
+
       try {
+        if (nextUser) await ensureUserProfile(nextUser);
         await refreshBusinesses();
       } catch (error) {
-        console.error("Could not load businesses:", error);
+        console.error("Could not initialize user workspace:", error);
         setMemberships([]);
         setActiveBusinessId(null);
       } finally {
