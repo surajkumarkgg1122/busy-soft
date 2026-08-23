@@ -1,6 +1,7 @@
 import type { Timestamp } from "firebase/firestore";
 
 export type BusinessStatus = "active" | "suspended" | "archived";
+export type TrialStatus = "active" | "expired";
 
 export type BusinessMemberRole =
   | "owner"
@@ -32,6 +33,13 @@ export interface BusinessFinancialYear {
   startDay: number;
 }
 
+export interface BusinessTrial {
+  status: TrialStatus;
+  planId: "trial";
+  startsAt: Timestamp;
+  expiresAt: Timestamp;
+}
+
 export interface Business {
   businessId: string;
   name: string;
@@ -46,6 +54,7 @@ export interface Business {
   timezone: string;
   ownerId: string;
   licenseId?: string;
+  trial: BusinessTrial;
   status: BusinessStatus;
   createdAt: Timestamp;
   updatedAt: Timestamp;
