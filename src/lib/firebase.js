@@ -21,3 +21,7 @@ const firebaseApp = firebaseConfigured
 
 export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
 export const firestoreDb = firebaseApp ? getFirestore(firebaseApp) : null;
+
+// Aliases used by the multi-tenant BusinessContext.
+export const auth = firebaseAuth;
+export const db = firestoreDb;
