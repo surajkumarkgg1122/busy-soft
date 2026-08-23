@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useBusiness } from "../../../../context/BusinessContext";
+import { useBusiness } from "../../../context/BusinessContext";
 
 const BUSINESS_TYPES = [
   "Retail",
@@ -102,7 +102,7 @@ export default function BusinessOnboardingPage() {
 
             <div className="relative flex h-full flex-col">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f5b544] text-[#182230] text-lg font-black">B</div>
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f5b544] text-lg font-black text-[#182230]">B</div>
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#8392a8]">Business Soft</p>
                   <p className="text-sm font-semibold">ERP Platform</p>
