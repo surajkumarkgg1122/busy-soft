@@ -1,0 +1,238 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Helpers ----------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isBusinessMember(businessId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function memberRole(businessId) {
+      return get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.role;
+    }
+
+    function hasRole(businessId, roles) {
+      return isBusinessMember(businessId) && memberRole(businessId) in roles;
+    }
+
+    function hasPermission(businessId, permission) {
+      return isBusinessMember(businessId)
+        && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.permissions[permission] == true;
+    }
+
+    function ownerOrAdmin(businessId) {
+      return hasRole(businessId, ['owner', 'admin']);
+    }
+
+    // ---------- User profiles ----------
+
+    match /users/{userId} {
+      allow read: if isUser(userId);
+      allow create: if isUser(userId);
+      allow update: if isUser(userId);
+      allow delete: if false;
+    }
+
+    // ---------- Licenses ----------
+    // License documents are platform-controlled. Client applications must not
+    // create, update, or delete licenses directly.
+    match /licenses/{licenseId} {
+      allow read: if signedIn()
+        && resource.data.businessId != null
+        && isBusinessMember(resource.data.businessId);
+      allow create, update, delete: if false;
+    }
+
+    // ---------- Businesses ----------
+
+    match /businesses/{businessId} {
+      allow read: if isBusinessMember(businessId);
+
+      // Business creation is intentionally allowed for an authenticated user.
+      // The client must set ownerId to the authenticated UID. After creation,
+      // the membership document is created as part of onboarding.
+      allow create: if signedIn()
+        && request.resource.data.businessId == businessId
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == 'active';
+
+      allow update: if ownerOrAdmin(businessId);
+      allow delete: if hasRole(businessId, ['owner']);
+
+      match /members/{userId} {
+        allow read: if isBusinessMember(businessId);
+
+        // Owner/admin can manage memberships. A user may create their own
+        // initial membership only when the new member is the business owner.
+        allow create: if ownerOrAdmin(businessId)
+          || (signedIn()
+            && userId == request.auth.uid
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.role == 'owner'
+            && request.resource.data.status == 'active'
+            && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid);
+
+        allow update: if ownerOrAdmin(businessId);
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      // ---------- Business settings ----------
+      match /settings/{settingId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update, delete: if ownerOrAdmin(businessId);
+      }
+
+      // ---------- Customers ----------
+      match /customers/{customerId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'sales');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      // ---------- Suppliers ----------
+      match /suppliers/{supplierId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'purchases');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      // ---------- Items / catalog ----------
+      match /items/{itemId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'inventory');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      match /categories/{categoryId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update, delete: if hasPermission(businessId, 'inventory');
+      }
+
+      match /units/{unitId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update, delete: if hasPermission(businessId, 'inventory');
+      }
+
+      // ---------- Sales ----------
+      match /invoices/{invoiceId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'sales');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      match /quotations/{quotationId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'sales');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      match /salesOrders/{orderId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'sales');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      match /salesReturns/{returnId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'sales');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      // ---------- Purchases ----------
+      match /purchases/{purchaseId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'purchases');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      match /purchaseOrders/{orderId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'purchases');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      match /purchaseReturns/{returnId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'purchases');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      // ---------- Payments / expenses ----------
+      match /payments/{paymentId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'payments');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update: if hasPermission(businessId, 'expenses');
+        allow delete: if ownerOrAdmin(businessId);
+      }
+
+      // ---------- Inventory ----------
+      match /stockMovements/{movementId} {
+        allow read: if isBusinessMember(businessId);
+        // Stock movements should normally be generated by trusted transaction
+        // logic. Allowing inventory users to create them is retained for now;
+        // this can be tightened once the stock service is implemented.
+        allow create: if hasPermission(businessId, 'inventory');
+        allow update, delete: if ownerOrAdmin(businessId);
+      }
+
+      match /stockAdjustments/{adjustmentId} {
+        allow read: if isBusinessMember(businessId);
+        allow create: if hasPermission(businessId, 'inventory');
+        allow update, delete: if ownerOrAdmin(businessId);
+      }
+
+      // ---------- Accounting ----------
+      match /accounts/{accountId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update, delete: if hasRole(businessId, ['owner', 'admin', 'accountant']);
+      }
+
+      match /ledgerEntries/{entryId} {
+        allow read: if hasPermission(businessId, 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']);
+        // Ledger entries should ultimately be written only by trusted server
+        // transactions. Keep client writes disabled for accounting integrity.
+        allow create, update, delete: if false;
+      }
+
+      match /taxRates/{taxId} {
+        allow read: if isBusinessMember(businessId);
+        allow create, update, delete: if hasRole(businessId, ['owner', 'admin', 'accountant']);
+      }
+
+      // ---------- Sequences ----------
+      match /sequences/{sequenceId} {
+        allow read: if isBusinessMember(businessId);
+        // Sequence increments should use trusted atomic server-side logic.
+        allow create, update, delete: if false;
+      }
+
+      // ---------- Audit logs ----------
+      match /auditLogs/{logId} {
+        allow read: if ownerOrAdmin(businessId);
+        allow create, update, delete: if false;
+      }
+    }
+
+    // Deny every collection not explicitly listed above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
