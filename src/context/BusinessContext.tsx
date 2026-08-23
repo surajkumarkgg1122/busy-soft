@@ -18,8 +18,8 @@ import {
   type ReactNode,
 } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { auth, db } from "@/lib/firebase";
-import type { Business, BusinessMember } from "@/types";
+import { firebaseAuth, firestoreDb } from "../lib/firebase";
+import type { Business, BusinessMember } from "../types";
 
 interface BusinessMembership extends BusinessMember {
   business: Business;
@@ -60,15 +60,15 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refreshBusinesses = useCallback(async () => {
-    if (!auth || !db || !auth.currentUser) {
+    if (!firebaseAuth || !firestoreDb || !firebaseAuth.currentUser) {
       setMemberships([]);
       setActiveBusinessId(null);
       return;
     }
 
-    const uid = auth.currentUser.uid;
+    const uid = firebaseAuth.currentUser.uid;
     const membershipSnapshot = await getDocs(
-      collection(db, "users", uid, "businessMemberships"),
+      collection(firestoreDb, "users", uid, "businessMemberships"),
     );
 
     const loaded: BusinessMembership[] = [];
@@ -78,7 +78,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       if (membership.status !== "active") continue;
 
       const businessSnapshot = await getDoc(
-        doc(db, "businesses", membershipDoc.id),
+        doc(firestoreDb, "businesses", membershipDoc.id),
       );
 
       if (!businessSnapshot.exists()) continue;
@@ -105,12 +105,12 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!auth) {
+    if (!firebaseAuth) {
       setLoading(false);
       return undefined;
     }
 
-    return onAuthStateChanged(auth, async (nextUser) => {
+    return onAuthStateChanged(firebaseAuth, async (nextUser) => {
       setUser(nextUser);
       setLoading(true);
       try {
@@ -134,14 +134,14 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   }, [memberships]);
 
   const createBusiness = useCallback(async (input: CreateBusinessInput) => {
-    if (!auth || !db || !auth.currentUser) {
+    if (!firebaseAuth || !firestoreDb || !firebaseAuth.currentUser) {
       throw new Error("You must be signed in to create a business.");
     }
 
-    const uid = auth.currentUser.uid;
-    const businessRef = doc(collection(db, "businesses"));
-    const membershipRef = doc(db, "businesses", businessRef.id, "members", uid);
-    const userMembershipRef = doc(db, "users", uid, "businessMemberships", businessRef.id);
+    const uid = firebaseAuth.currentUser.uid;
+    const businessRef = doc(collection(firestoreDb, "businesses"));
+    const membershipRef = doc(firestoreDb, "businesses", businessRef.id, "members", uid);
+    const userMembershipRef = doc(firestoreDb, "users", uid, "businessMemberships", businessRef.id);
     const now = Timestamp.now();
 
     const business: Business = {
@@ -150,7 +150,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       legalName: input.legalName?.trim() || input.name.trim(),
       businessType: input.businessType?.trim() || "general",
       phone: input.phone?.trim() || "",
-      email: input.email?.trim() || auth.currentUser.email || "",
+      email: input.email?.trim() || firebaseAuth.currentUser.email || "",
       address: {
         line1: "",
         line2: "",
@@ -190,7 +190,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       joinedAt: now,
     };
 
-    const batch = writeBatch(db);
+    const batch = writeBatch(firestoreDb);
     batch.set(businessRef, business);
     batch.set(membershipRef, membership);
     batch.set(userMembershipRef, membership);
