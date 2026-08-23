@@ -1,8 +1,67 @@
 @import "tailwindcss";
 
+/* =========================================================
+   BUSINESS SOFT ERP — CENTRAL THEME
+   Change these tokens to re-theme the application later.
+   ========================================================= */
+:root {
+  /* Brand */
+  --erp-primary: #4f46e5;
+  --erp-primary-hover: #4338ca;
+  --erp-primary-soft: #eeedff;
+  --erp-primary-ring: rgba(79, 70, 229, 0.12);
+  --erp-accent: #f5a229;
+  --erp-accent-hover: #df8e18;
+
+  /* Surfaces */
+  --erp-background: #f8f7f4;
+  --erp-surface: #ffffff;
+  --erp-surface-muted: #fbfaf9;
+  --erp-surface-subtle: #f4f3f1;
+
+  /* Text */
+  --erp-text: #182230;
+  --erp-text-secondary: #344054;
+  --erp-text-muted: #667085;
+  --erp-text-faint: #98a2b3;
+
+  /* Borders */
+  --erp-border: #e7e5e4;
+  --erp-border-light: #eaecf0;
+  --erp-border-input: #d0d5dd;
+
+  /* Status */
+  --erp-success: #168361;
+  --erp-success-soft: #e8f8f1;
+  --erp-warning: #b7791f;
+  --erp-warning-soft: #fff7e8;
+  --erp-danger: #c13c25;
+  --erp-danger-soft: #fff1ed;
+  --erp-error: #b42318;
+  --erp-error-soft: #fef3f2;
+
+  /* Navigation */
+  --erp-sidebar: #182230;
+  --erp-sidebar-hover: #222e3f;
+  --erp-sidebar-active: var(--erp-primary);
+
+  /* Typography */
+  --erp-font-sans: var(--font-geist-sans);
+  --erp-font-mono: var(--font-geist-mono);
+
+  /* Shape / depth */
+  --erp-radius-sm: 0.625rem;
+  --erp-radius-md: 0.75rem;
+  --erp-radius-lg: 1rem;
+  --erp-radius-xl: 1.25rem;
+  --erp-shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --erp-shadow-panel: 0 3px 10px rgba(16, 24, 40, 0.04);
+}
+
+/* Existing light/dark app variables remain compatible. */
 .light {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: var(--erp-surface);
+  --foreground: var(--erp-text);
 }
 
 .dark {
@@ -13,17 +72,125 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-erp-primary: var(--erp-primary);
+  --color-erp-primary-hover: var(--erp-primary-hover);
+  --color-erp-primary-soft: var(--erp-primary-soft);
+  --color-erp-accent: var(--erp-accent);
+  --color-erp-accent-hover: var(--erp-accent-hover);
+  --color-erp-surface: var(--erp-surface);
+  --color-erp-surface-muted: var(--erp-surface-muted);
+  --color-erp-text: var(--erp-text);
+  --color-erp-text-secondary: var(--erp-text-secondary);
+  --color-erp-text-muted: var(--erp-text-muted);
+  --color-erp-text-faint: var(--erp-text-faint);
+  --color-erp-border: var(--erp-border);
+  --color-erp-border-light: var(--erp-border-light);
+  --color-erp-success: var(--erp-success);
+  --color-erp-success-soft: var(--erp-success-soft);
+  --color-erp-warning: var(--erp-warning);
+  --color-erp-warning-soft: var(--erp-warning-soft);
+  --color-erp-danger: var(--erp-danger);
+  --color-erp-danger-soft: var(--erp-danger-soft);
+  --color-erp-sidebar: var(--erp-sidebar);
+  --font-sans: var(--erp-font-sans);
+  --font-mono: var(--erp-font-mono);
 }
 
-
+html,
+body {
+  min-height: 100%;
+}
 
 body {
   background: var(--background);
   color: var(--foreground);
+  font-family: var(--erp-font-sans), sans-serif;
 }
 
+/* Shared ERP utility classes for new modules. */
+.erp-page {
+  background: var(--erp-background);
+  color: var(--erp-text);
+}
+
+.erp-card {
+  border: 1px solid var(--erp-border);
+  background: var(--erp-surface);
+  border-radius: var(--erp-radius-lg);
+  box-shadow: var(--erp-shadow-card);
+}
+
+.erp-panel {
+  border: 1px solid var(--erp-border);
+  background: var(--erp-surface);
+  border-radius: var(--erp-radius-lg);
+  box-shadow: var(--erp-shadow-panel);
+}
+
+.erp-input {
+  border: 1px solid var(--erp-border-input);
+  background: var(--erp-surface);
+  color: var(--erp-text-secondary);
+  border-radius: var(--erp-radius-md);
+  outline: none;
+}
+
+.erp-input:focus {
+  border-color: var(--erp-primary);
+  box-shadow: 0 0 0 4px var(--erp-primary-ring);
+}
+
+.erp-btn-primary {
+  background: var(--erp-primary);
+  color: #fff;
+  border-radius: var(--erp-radius-md);
+}
+
+.erp-btn-primary:hover {
+  background: var(--erp-primary-hover);
+}
+
+.erp-btn-accent {
+  background: var(--erp-accent);
+  color: #fff;
+  border-radius: var(--erp-radius-md);
+}
+
+.erp-btn-accent:hover {
+  background: var(--erp-accent-hover);
+}
+
+.erp-status-success {
+  background: var(--erp-success-soft);
+  color: var(--erp-success);
+}
+
+.erp-status-warning {
+  background: var(--erp-warning-soft);
+  color: var(--erp-warning);
+}
+
+.erp-status-danger {
+  background: var(--erp-danger-soft);
+  color: var(--erp-danger);
+}
+
+.erp-status-error {
+  background: var(--erp-error-soft);
+  color: var(--erp-error);
+}
+
+.erp-text-primary { color: var(--erp-primary); }
+.erp-text-main { color: var(--erp-text); }
+.erp-text-secondary { color: var(--erp-text-secondary); }
+.erp-text-muted { color: var(--erp-text-muted); }
+.erp-text-faint { color: var(--erp-text-faint); }
+.erp-bg { background: var(--erp-background); }
+.erp-surface { background: var(--erp-surface); }
+.erp-border { border-color: var(--erp-border); }
+.erp-sidebar { background: var(--erp-sidebar); }
+
+/* Existing table behavior. */
 table {
   width: 100%;
   min-width: 0 !important;
