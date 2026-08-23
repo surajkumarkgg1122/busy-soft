@@ -5,10 +5,7 @@ import {
   doc,
   getDoc,
   getDocs,
-  orderBy,
-  query,
   Timestamp,
-  where,
   writeBatch,
 } from "firebase/firestore";
 import {
@@ -63,7 +60,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refreshBusinesses = useCallback(async () => {
-    if (!auth.currentUser) {
+    if (!auth || !db || !auth.currentUser) {
       setMemberships([]);
       setActiveBusinessId(null);
       return;
@@ -95,7 +92,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     setMemberships(loaded);
 
     const stored = window.localStorage.getItem(ACTIVE_BUSINESS_KEY);
-    const storedExists = stored && loaded.some((item) => item.business.businessId === stored);
+    const storedExists = Boolean(stored && loaded.some((item) => item.business.businessId === stored));
 
     if (storedExists) {
       setActiveBusinessId(stored);
@@ -108,11 +105,20 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!auth) {
+      setLoading(false);
+      return undefined;
+    }
+
     return onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
       setLoading(true);
       try {
         await refreshBusinesses();
+      } catch (error) {
+        console.error("Could not load businesses:", error);
+        setMemberships([]);
+        setActiveBusinessId(null);
       } finally {
         setLoading(false);
       }
@@ -128,7 +134,9 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   }, [memberships]);
 
   const createBusiness = useCallback(async (input: CreateBusinessInput) => {
-    if (!auth.currentUser) throw new Error("You must be signed in to create a business.");
+    if (!auth || !db || !auth.currentUser) {
+      throw new Error("You must be signed in to create a business.");
+    }
 
     const uid = auth.currentUser.uid;
     const businessRef = doc(collection(db, "businesses"));
