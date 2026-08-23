@@ -1,6 +1,6 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import Sidebar from "./Components/Sidebar/page";
+import { BusinessProvider } from "../context/BusinessContext";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,10 +19,9 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html
-      lang="en" className='light'>
-      <body className="main ">
-          {children}
+    <html lang="en" className="light">
+      <body className="main">
+        <BusinessProvider>{children}</BusinessProvider>
       </body>
     </html>
   );
