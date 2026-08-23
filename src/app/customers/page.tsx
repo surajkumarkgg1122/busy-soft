@@ -45,7 +45,7 @@ export default function CustomersPage() {
 
   const filtered = useMemo(() => customers.filter((customer) => [customer.name, customer.phone, customer.email, customer.customerCode].join(" ").toLowerCase().includes(query.toLowerCase())), [customers, query]);
   const totals = useMemo(() => ({ total: customers.length, active: customers.filter((customer) => (customer.status || "Active").toLowerCase() === "active").length, outstanding: customers.reduce((sum, customer) => sum + Number(customer.balance || 0), 0) }), [customers]);
-  const selected = customers.find((customer) => customer.id === selectedId) ?? filtered[0] ?? null;
+  const selected = selectedId ? customers.find((customer) => customer.id === selectedId) ?? null : null;
   const update = (field: keyof FormValues) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm((current) => ({ ...current, [field]: event.target.value }));
   const openAdd = () => { setForm(emptyForm); setActiveTab("address"); setError(""); setShowForm(true); };
 
