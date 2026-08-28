@@ -3,6 +3,7 @@ import type { Timestamp } from "firebase/firestore";
 export type BusinessStatus = "active" | "suspended" | "archived";
 export type TrialStatus = "active" | "expired";
 export type BusinessMemberStatus = "active" | "invited" | "disabled";
+export type BusinessInvitationStatus = "pending" | "accepted" | "rejected" | "expired";
 
 export type BusinessMemberRole =
   | "owner"
@@ -71,10 +72,6 @@ export interface MemberPermissions {
   settings: boolean;
 }
 
-/**
- * Authoritative membership stored at:
- * businesses/{businessId}/members/{uid}
- */
 export interface BusinessMember {
   uid: string;
   role: BusinessMemberRole;
@@ -82,16 +79,22 @@ export interface BusinessMember {
   permissions: MemberPermissions;
   joinedAt: Timestamp;
   invitedBy?: string;
+  invitationId?: string;
 }
 
-/**
- * Denormalized membership index stored at:
- * users/{uid}/businessMemberships/{businessId}
- *
- * This exists only to efficiently build the user's company switcher.
- * Authorization must always be checked against the authoritative
- * businesses/{businessId}/members/{uid} document.
- */
 export interface UserBusinessMembership extends BusinessMember {
   businessId: string;
+}
+
+export interface BusinessInvitation {
+  invitationId: string;
+  businessId: string;
+  invitedEmail: string;
+  role: BusinessMemberRole;
+  permissions: MemberPermissions;
+  status: BusinessInvitationStatus;
+  invitedBy: string;
+  createdAt: Timestamp;
+  expiresAt: Timestamp;
+  respondedAt?: Timestamp;
 }
