@@ -20,7 +20,12 @@ import {
 } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { firebaseAuth, firestoreDb } from "../lib/firebase";
-import type { AppUser, Business, BusinessMember } from "../types";
+import type {
+  AppUser,
+  Business,
+  BusinessMember,
+  UserBusinessMembership,
+} from "../types";
 
 interface BusinessMembership extends BusinessMember {
   business: Business;
@@ -108,11 +113,12 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     const loaded: BusinessMembership[] = [];
 
     for (const membershipDoc of membershipSnapshot.docs) {
-      const membership = membershipDoc.data() as BusinessMember;
+      const membership = membershipDoc.data() as UserBusinessMembership;
       if (membership.status !== "active") continue;
 
+      const businessId = membership.businessId || membershipDoc.id;
       const businessSnapshot = await getDoc(
-        doc(firestoreDb, "businesses", membershipDoc.id),
+        doc(firestoreDb, "businesses", businessId),
       );
       if (!businessSnapshot.exists()) continue;
 
@@ -249,10 +255,15 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       joinedAt: now,
     };
 
+    const userMembership: UserBusinessMembership = {
+      ...membership,
+      businessId: businessRef.id,
+    };
+
     const batch = writeBatch(firestoreDb);
     batch.set(businessRef, business);
     batch.set(membershipRef, membership);
-    batch.set(userMembershipRef, membership);
+    batch.set(userMembershipRef, userMembership);
     await batch.commit();
 
     await refreshBusinesses();
