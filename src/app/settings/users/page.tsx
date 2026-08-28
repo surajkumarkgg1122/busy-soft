@@ -1,49 +1,277 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { collection, doc, getDocs, query, Timestamp, updateDoc, where } from "firebase/firestore";
+import { collection, doc, getDocs, query, Timestamp, where } from "firebase/firestore";
 import Sidebar from "../../Components/Sidebar/page";
 import TopNav from "../../Components/TopNav/page";
 import AuthGate from "../../Components/Auth/AuthGate";
 import { firestoreDb, firebaseAuth } from "../../../lib/firebase";
 import { useBusiness } from "../../../context/BusinessContext";
-import type { BusinessInvitation, BusinessMemberRole, MemberPermissions, PermissionAction, PermissionModule, GranularPermissions } from "../../../types";
+import type { BusinessInvitation, BusinessMemberRole } from "../../../types";
+
+type MemberRow = {
+  uid: string;
+  role: BusinessMemberRole;
+  status: "active" | "invited" | "disabled";
+  joinedAt?: Timestamp;
+  name?: string;
+  email?: string;
+};
 
 const ROLES: BusinessMemberRole[] = ["admin", "manager", "accountant", "sales", "inventory", "viewer"];
-const MODULES: { key: PermissionModule; label: string; actions: PermissionAction[] }[] = [
-  { key: "sales", label: "Sales", actions: ["view", "create", "edit", "delete", "print", "export", "approve"] },
-  { key: "purchases", label: "Purchases", actions: ["view", "create", "edit", "delete", "print", "export", "approve"] },
-  { key: "inventory", label: "Inventory", actions: ["view", "create", "edit", "delete", "print", "export"] },
-  { key: "payments", label: "Payments", actions: ["view", "create", "edit", "delete", "print", "export"] },
-  { key: "expenses", label: "Expenses", actions: ["view", "create", "edit", "delete", "print", "export"] },
-  { key: "reports", label: "Reports", actions: ["view", "print", "export"] },
-  { key: "settings", label: "Settings", actions: ["view", "create", "edit", "delete"] },
-  { key: "parties", label: "Parties", actions: ["view", "create", "edit", "delete", "export"] },
-  { key: "items", label: "Items", actions: ["view", "create", "edit", "delete", "export"] },
-  { key: "cashBank", label: "Cash & Bank", actions: ["view", "create", "edit", "delete", "print", "export"] },
-  { key: "gst", label: "GST", actions: ["view", "create", "edit", "delete", "export"] },
-];
 
-const ROLE_DEFAULTS: Record<string, GranularPermissions> = {
-  admin: Object.fromEntries(MODULES.map(m => [m.key, Object.fromEntries(m.actions.map(a => [a, true]))])),
-  manager: { sales:{view:true,create:true,edit:true,print:true,export:true}, purchases:{view:true,create:true,edit:true,print:true,export:true}, inventory:{view:true,create:true,edit:true,print:true,export:true}, payments:{view:true,create:true,edit:true,print:true}, expenses:{view:true,create:true,edit:true}, reports:{view:true,print:true,export:true}, parties:{view:true,create:true,edit:true}, items:{view:true,create:true,edit:true}, cashBank:{view:true,create:true,edit:true,print:true}, gst:{view:true,export:true} },
-  accountant: { sales:{view:true,create:true,edit:true,print:true,export:true}, purchases:{view:true,create:true,edit:true,print:true,export:true}, inventory:{view:true,export:true}, payments:{view:true,create:true,edit:true,print:true,export:true}, expenses:{view:true,create:true,edit:true,print:true,export:true}, reports:{view:true,print:true,export:true}, parties:{view:true,create:true,edit:true,export:true}, items:{view:true,export:true}, cashBank:{view:true,create:true,edit:true,print:true,export:true}, gst:{view:true,export:true} },
-  sales: { sales:{view:true,create:true,edit:true,print:true}, parties:{view:true,create:true,edit:true}, items:{view:true}, payments:{view:true,create:true,print:true} },
-  inventory: { inventory:{view:true,create:true,edit:true,print:true}, items:{view:true,create:true,edit:true}, parties:{view:true} },
-  viewer: Object.fromEntries(MODULES.map(m => [m.key, Object.fromEntries(m.actions.filter(a => ["view","print"].includes(a)).map(a => [a, true]))])),
-};
-function defaultsFor(role:string):GranularPermissions{return JSON.parse(JSON.stringify(ROLE_DEFAULTS[role]||{}));}
-function legacyFrom(p:any):MemberPermissions{return{sales:!!p?.sales?.view,purchases:!!p?.purchases?.view,inventory:!!p?.inventory?.view,payments:!!p?.payments?.view,expenses:!!p?.expenses?.view,reports:!!p?.reports?.view,settings:!!p?.settings?.view};}
+function formatDate(value?: Timestamp) {
+  if (!value) return "—";
+  return value.toDate().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
 
-export default function UsersPage(){
- const {activeBusiness,activeBusinessId,loading:businessLoading}=useBusiness();
- const [members,setMembers]=useState<any[]>([]),[invitations,setInvitations]=useState<BusinessInvitation[]>([]),[email,setEmail]=useState(""),[role,setRole]=useState<BusinessMemberRole>("sales"),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState(""),[selected,setSelected]=useState<any|null>(null),[editRole,setEditRole]=useState<BusinessMemberRole>("sales"),[editPermissions,setEditPermissions]=useState<GranularPermissions>({});
- const isManager=useMemo(()=>members.some(m=>m.uid===firebaseAuth?.currentUser?.uid&&["owner","admin"].includes(m.role)),[members]);
- async function load(){if(!firestoreDb||!activeBusinessId){setLoading(false);return;}setLoading(true);try{const ms=await getDocs(collection(firestoreDb,"businesses",activeBusinessId,"members"));setMembers(ms.docs.map(d=>({id:d.id,...d.data()})));const is=await getDocs(query(collection(firestoreDb,"invitations"),where("businessId","==",activeBusinessId)));setInvitations(is.docs.map(d=>d.data() as BusinessInvitation).filter(i=>i.status==="pending"));}catch(e){console.error(e);setError("Could not load users and invitations.");}finally{setLoading(false);}}
- useEffect(()=>{if(!businessLoading)load();},[activeBusinessId,businessLoading]);
- function openMember(m:any){setSelected(m);setEditRole(m.role);setEditPermissions(m.permissions?.sales&&typeof m.permissions.sales==="object"?m.permissions:defaultsFor(m.role));setMessage("");setError("");}
- function toggle(mod:PermissionModule,act:PermissionAction){setEditPermissions(p=>({...p,[mod]:{...(p[mod]||{}),[act]:!p[mod]?.[act]}}));}
- async function saveMember(){if(!selected||!activeBusinessId||!firestoreDb||!isManager)return;if(selected.uid===activeBusiness?.business.ownerId){setError("The business owner cannot be changed from this screen.");return;}setSaving(true);try{const permissions={...legacyFrom(editPermissions),...editPermissions};await updateDoc(doc(firestoreDb,"businesses",activeBusinessId,"members",selected.uid),{role:editRole,permissions,updatedAt:Timestamp.now()});await updateDoc(doc(firestoreDb,"users",selected.uid,"businessMemberships",activeBusinessId),{role:editRole,permissions});setSelected(null);setMessage("User role and permissions updated.");await load();}catch(e){console.error(e);setError("Could not update this user.");}finally{setSaving(false);}}
- async function invite(){const e=email.trim().toLowerCase();if(!e||!isManager)return;if(!/^\S+@\S+\.\S+$/.test(e)){setError("Enter a valid email address.");return;}setSaving(true);try{const ref=doc(collection(firestoreDb!,"invitations"));const now=Timestamp.now();const {setDoc}=await import("firebase/firestore");await setDoc(ref,{invitationId:ref.id,businessId:activeBusinessId,invitedEmail:e,role,permissions:defaultsFor(role),status:"pending",invitedBy:firebaseAuth!.currentUser!.uid,createdAt:now,expiresAt:Timestamp.fromMillis(now.toMillis()+7*86400000)});setEmail("");setMessage("Invitation created. Share the invite link with the user.");await load();}catch(err){console.error(err);setError("Could not create invitation.");}finally{setSaving(false);}}
- return <AuthGate><div className="flex min-h-screen bg-[#f8f7f4]"><Sidebar/><main className="min-w-0 flex-1 px-4 pb-10 sm:px-6 lg:px-8"><TopNav/><div className="mx-auto max-w-[1450px] py-5"><div className="mb-6"><p className="text-sm font-semibold text-[#4f46e5]">Administration</p><h1 className="mt-1 text-3xl font-bold text-[#182230]">Users & Roles</h1><p className="mt-2 text-sm text-[#667085]">Manage team access and detailed permissions for {activeBusiness?.business.name||"this business"}.</p></div>{message&&<div className="mb-4 rounded-xl border border-[#abefc6] bg-[#ecfdf3] px-4 py-3 text-sm text-[#067647]">{message}</div>}{error&&<div className="mb-4 rounded-xl border border-[#fecdca] bg-[#fef3f2] px-4 py-3 text-sm text-[#b42318]">{error}</div>}<div className="grid gap-5 xl:grid-cols-[1.35fr_.65fr]"><section className="rounded-2xl border border-[#e7e5e4] bg-white"><div className="flex items-center justify-between border-b border-[#eaecf0] px-5 py-4"><div><h2 className="font-bold text-[#182230]">Business members</h2><p className="text-xs text-[#98a2b3]">Select Manage to edit role and permissions.</p></div><span className="rounded-full bg-[#f2f4f7] px-2.5 py-1 text-xs font-semibold text-[#667085]">{members.length} users</span></div><div className="divide-y divide-[#f2f4f7]">{loading?<div className="p-8 text-sm text-[#667085]">Loading…</div>:members.map(m=><div key={m.id} className="flex items-center gap-4 px-5 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#eeedff] text-sm font-bold text-[#4f46e5]">{m.role?.slice(0,1).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="text-sm font-semibold capitalize text-[#344054]">{m.uid===activeBusiness?.business.ownerId?"Owner":m.role}</p><p className="truncate text-xs text-[#98a2b3]">{m.uid}</p></div><span className="rounded-full bg-[#ecfdf3] px-2.5 py-1 text-xs font-semibold text-[#067647]">{m.status}</span><button type="button" onClick={()=>openMember(m)} disabled={!isManager||m.uid===activeBusiness?.business.ownerId} className="rounded-lg border border-[#d0d5dd] px-3 py-2 text-xs font-semibold text-[#344054] disabled:cursor-not-allowed disabled:opacity-40">Manage</button></div>)}</div></section><section className="rounded-2xl border border-[#e7e5e4] bg-white p-5"><h2 className="font-bold text-[#182230]">Invite user</h2><p className="mt-1 text-xs text-[#667085]">Create an invitation for this business.</p><div className="mt-5 space-y-4"><input value={email} onChange={e=>setEmail(e.target.value)} type="email" placeholder="employee@example.com" disabled={!isManager} className="h-11 w-full rounded-xl border border-[#d0d5dd] px-3 text-sm disabled:bg-[#f2f4f7]"/><select value={role} onChange={e=>setRole(e.target.value as BusinessMemberRole)} disabled={!isManager} className="h-11 w-full rounded-xl border border-[#d0d5dd] bg-white px-3 text-sm">{ROLES.map(r=><option key={r} value={r}>{r[0].toUpperCase()+r.slice(1)}</option>)}</select><button onClick={invite} disabled={saving||!email.trim()||!isManager} className="h-11 w-full rounded-xl bg-[#4f46e5] text-sm font-semibold text-white disabled:opacity-50">{saving?"Working…":"Create invitation"}</button></div></section></div><section className="mt-5 rounded-2xl border border-[#e7e5e4] bg-white"><div className="border-b border-[#eaecf0] px-5 py-4"><h2 className="font-bold text-[#182230]">Pending invitations</h2></div>{invitations.length===0?<p className="p-6 text-sm text-[#98a2b3]">No pending invitations.</p>:invitations.map(i=><div key={i.invitationId} className="flex items-center justify-between gap-4 border-b border-[#f2f4f7] px-5 py-4"><div><p className="text-sm font-semibold text-[#344054]">{i.invitedEmail}</p><p className="text-xs capitalize text-[#98a2b3]">{i.role}</p></div><button onClick={()=>navigator.clipboard.writeText(`${window.location.origin}/join/${i.invitationId}`)} className="rounded-lg border border-[#d0d5dd] px-3 py-2 text-xs font-semibold">Copy invite link</button></div>)}</section></div></main>{selected&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"><div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-[#eaecf0] px-5 py-4"><div><h2 className="font-bold text-[#182230]">Manage user</h2><p className="text-xs text-[#98a2b3]">{selected.uid}</p></div><button onClick={()=>setSelected(null)} className="text-xl text-[#667085]">×</button></div><div className="max-h-[70vh] overflow-y-auto p-5"><div className="mb-5 flex flex-wrap items-end gap-3"><label className="text-sm font-semibold text-[#344054]">Role<select value={editRole} onChange={e=>{setEditRole(e.target.value as BusinessMemberRole);setEditPermissions(defaultsFor(e.target.value));}} className="mt-2 block h-10 rounded-lg border border-[#d0d5dd] bg-white px-3 text-sm">{ROLES.map(r=><option key={r} value={r}>{r[0].toUpperCase()+r.slice(1)}</option>)}</select></label><button onClick={()=>setEditPermissions(defaultsFor(editRole))} className="h-10 rounded-lg border border-[#d0d5dd] px-3 text-xs font-semibold">Reset to role defaults</button></div><div className="overflow-x-auto rounded-xl border border-[#eaecf0]"><table className="w-full min-w-[850px] text-left text-xs"><thead className="bg-[#f8f9fc] text-[#667085]"><tr><th className="px-4 py-3">Module</th>{["view","create","edit","delete","print","export","approve"].map(a=><th key={a} className="px-3 py-3 text-center capitalize">{a}</th>)}</tr></thead><tbody>{MODULES.map(m=><tr key={m.key} className="border-t border-[#f2f4f7]"><td className="px-4 py-3 font-semibold text-[#344054]">{m.label}</td>{["view","create","edit","delete","print","export","approve"].map(a=>m.actions.includes(a as PermissionAction)?<td key={a} className="px-3 py-3 text-center"><input type="checkbox" checked={!!editPermissions[m.key]?.[a as PermissionAction]} onChange={()=>toggle(m.key,a as PermissionAction)}/></td>:<td key={a}/>)}</tr>)}</tbody></table></div></div><div className="flex justify-end gap-3 border-t border-[#eaecf0] px-5 py-4"><button onClick={()=>setSelected(null)} className="rounded-lg border border-[#d0d5dd] px-4 py-2 text-sm font-semibold">Cancel</button><button onClick={saveMember} disabled={saving} className="rounded-lg bg-[#4f46e5] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{saving?"Saving…":"Save changes"}</button></div></div></div>}</div></AuthGate>;
+export default function UsersPage() {
+  const { activeBusiness, activeBusinessId, loading: businessLoading, canManageUsers } = useBusiness();
+  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [invitations, setInvitations] = useState<BusinessInvitation[]>([]);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<BusinessMemberRole>("sales");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const currentUid = firebaseAuth?.currentUser?.uid;
+  const ownerId = activeBusiness?.business.ownerId;
+  const memberCount = members.length;
+  const activeCount = useMemo(() => members.filter((m) => m.status === "active").length, [members]);
+
+  async function load() {
+    if (!firestoreDb || !activeBusinessId) {
+      setMembers([]);
+      setInvitations([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    try {
+      const memberSnapshot = await getDocs(collection(firestoreDb, "businesses", activeBusinessId, "members"));
+      setMembers(
+        memberSnapshot.docs.map((snapshot) => {
+          const data = snapshot.data() as Record<string, unknown>;
+          return {
+            uid: snapshot.id,
+            role: (data.role as BusinessMemberRole) || "viewer",
+            status: (data.status as MemberRow["status"]) || "active",
+            joinedAt: data.joinedAt as Timestamp | undefined,
+            name: data.name as string | undefined,
+            email: data.email as string | undefined,
+          };
+        }),
+      );
+
+      const invitationSnapshot = await getDocs(
+        query(collection(firestoreDb, "invitations"), where("businessId", "==", activeBusinessId)),
+      );
+      setInvitations(
+        invitationSnapshot.docs
+          .map((snapshot) => snapshot.data() as BusinessInvitation)
+          .filter((invitation) => invitation.status === "pending" && invitation.expiresAt.toMillis() > Date.now()),
+      );
+    } catch (err) {
+      console.error(err);
+      setError("Could not load users and invitations. Check your Firestore rules and active business.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!businessLoading) void load();
+  }, [activeBusinessId, businessLoading]);
+
+  async function createInvitation() {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!canManageUsers || !firestoreDb || !activeBusinessId || !currentUid) return;
+    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const invitationRef = doc(collection(firestoreDb, "invitations"));
+      const now = Timestamp.now();
+      await import("firebase/firestore").then(({ setDoc }) =>
+        setDoc(invitationRef, {
+          invitationId: invitationRef.id,
+          businessId: activeBusinessId,
+          invitedEmail: normalizedEmail,
+          role,
+          permissions: {},
+          status: "pending",
+          invitedBy: currentUid,
+          createdAt: now,
+          expiresAt: Timestamp.fromMillis(now.toMillis() + 7 * 24 * 60 * 60 * 1000),
+        }),
+      );
+      setEmail("");
+      setMessage("Invitation created. Copy the invitation link and send it to the user.");
+      await load();
+    } catch (err) {
+      console.error(err);
+      setError("Could not create the invitation.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function copyInviteLink(invitationId: string) {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/join/${invitationId}`);
+      setMessage("Invitation link copied.");
+    } catch {
+      setError("Could not copy the invitation link.");
+    }
+  }
+
+  return (
+    <AuthGate>
+      <div className="flex min-h-screen bg-[#f8f7f4]">
+        <Sidebar />
+        <main className="min-w-0 flex-1 px-4 pb-10 sm:px-6 lg:px-8">
+          <TopNav />
+          <div className="mx-auto max-w-[1450px] py-5">
+            <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-[#4f46e5]">Administration</p>
+                <h1 className="mt-1 text-3xl font-bold text-[#182230]">Users & Roles</h1>
+                <p className="mt-2 text-sm text-[#667085]">
+                  Control who can access {activeBusiness?.business.name || "this business"} and what they can do.
+                </p>
+              </div>
+              <div className="flex gap-2 text-xs font-semibold">
+                <span className="rounded-full bg-white px-3 py-2 text-[#475467] shadow-sm ring-1 ring-[#e4e7ec]">{memberCount} members</span>
+                <span className="rounded-full bg-[#ecfdf3] px-3 py-2 text-[#067647]">{activeCount} active</span>
+              </div>
+            </div>
+
+            {!canManageUsers && (
+              <div className="mb-5 rounded-xl border border-[#fedf89] bg-[#fffaeb] px-4 py-3 text-sm text-[#b54708]">
+                You have view-only access to this page. Only the business owner or an administrator can manage users.
+              </div>
+            )}
+            {message && <div className="mb-4 rounded-xl border border-[#abefc6] bg-[#ecfdf3] px-4 py-3 text-sm text-[#067647]">{message}</div>}
+            {error && <div className="mb-4 rounded-xl border border-[#fecdca] bg-[#fef3f2] px-4 py-3 text-sm text-[#b42318]">{error}</div>}
+
+            <div className="grid gap-5 xl:grid-cols-[1.5fr_.5fr]">
+              <section className="overflow-hidden rounded-2xl border border-[#e7e5e4] bg-white">
+                <div className="flex items-center justify-between border-b border-[#eaecf0] px-5 py-4">
+                  <div>
+                    <h2 className="font-bold text-[#182230]">Business members</h2>
+                    <p className="mt-1 text-xs text-[#98a2b3]">Manage role, status and granular permissions from the member page.</p>
+                  </div>
+                  <span className="rounded-full bg-[#f2f4f7] px-2.5 py-1 text-xs font-semibold text-[#667085]">{memberCount}</span>
+                </div>
+
+                {loading ? (
+                  <div className="p-8 text-sm text-[#667085]">Loading members…</div>
+                ) : members.length === 0 ? (
+                  <div className="p-10 text-center text-sm text-[#667085]">No members found for the active business.</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-left">
+                      <thead className="bg-[#f8f9fc] text-xs font-semibold uppercase tracking-wide text-[#667085]">
+                        <tr>
+                          <th className="px-5 py-3">User</th>
+                          <th className="px-4 py-3">Role</th>
+                          <th className="px-4 py-3">Status</th>
+                          <th className="px-4 py-3">Joined</th>
+                          <th className="px-5 py-3 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#f2f4f7] text-sm">
+                        {members.map((member) => {
+                          const isOwner = member.uid === ownerId;
+                          const displayName = isOwner ? "Business Owner" : member.name || member.email || `User ${member.uid.slice(0, 8)}`;
+                          return (
+                            <tr key={member.uid} className="hover:bg-[#fafafa]">
+                              <td className="px-5 py-4">
+                                <div className="flex items-center gap-3">
+                                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#eeedff] text-sm font-bold text-[#4f46e5]">
+                                    {(displayName[0] || "U").toUpperCase()}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="truncate font-semibold text-[#344054]">{displayName}</p>
+                                    <p className="truncate text-xs text-[#98a2b3]">{member.email || `UID: ${member.uid}`}</p>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-4">
+                                <span className="rounded-lg bg-[#f2f4f7] px-2.5 py-1 text-xs font-semibold capitalize text-[#475467]">{isOwner ? "Owner" : member.role}</span>
+                              </td>
+                              <td className="px-4 py-4">
+                                <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${member.status === "active" ? "bg-[#ecfdf3] text-[#067647]" : "bg-[#fef3f2] text-[#b42318]"}`}>
+                                  {member.status}
+                                </span>
+                              </td>
+                              <td className="px-4 py-4 text-xs text-[#667085]">{formatDate(member.joinedAt)}</td>
+                              <td className="px-5 py-4 text-right">
+                                {isOwner ? (
+                                  <span className="text-xs font-semibold text-[#98a2b3]">Protected</span>
+                                ) : (
+                                  <Link
+                                    href={`/settings/users/${member.uid}`}
+                                    className={`inline-flex rounded-lg border px-3 py-2 text-xs font-semibold ${canManageUsers ? "border-[#d0d5dd] text-[#344054] hover:bg-[#f8f9fc]" : "border-[#eaecf0] text-[#98a2b3]"}`}
+                                  >
+                                    {canManageUsers ? "Manage" : "View"}
+                                  </Link>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-2xl border border-[#e7e5e4] bg-white p-5">
+                <h2 className="font-bold text-[#182230]">Invite user</h2>
+                <p className="mt-1 text-xs text-[#667085]">Invite another person to this business without giving them access to your other companies.</p>
+                <div className="mt-5 space-y-4">
+                  <label className="block text-xs font-semibold text-[#344054]">Email address<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="employee@example.com" disabled={!canManageUsers || saving} className="mt-2 h-11 w-full rounded-xl border border-[#d0d5dd] px-3 text-sm outline-none focus:border-[#4f46e5] disabled:bg-[#f2f4f7]" /></label>
+                  <label className="block text-xs font-semibold text-[#344054]">Initial role<select value={role} onChange={(e) => setRole(e.target.value as BusinessMemberRole)} disabled={!canManageUsers || saving} className="mt-2 h-11 w-full rounded-xl border border-[#d0d5dd] bg-white px-3 text-sm disabled:bg-[#f2f4f7]">{ROLES.map((item) => <option key={item} value={item}>{item[0].toUpperCase() + item.slice(1)}</option>)}</select></label>
+                  <button type="button" onClick={createInvitation} disabled={!canManageUsers || saving || !email.trim()} className="h-11 w-full rounded-xl bg-[#4f46e5] text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{saving ? "Creating…" : "Create invitation"}</button>
+                </div>
+              </section>
+            </div>
+
+            <section className="mt-5 overflow-hidden rounded-2xl border border-[#e7e5e4] bg-white">
+              <div className="border-b border-[#eaecf0] px-5 py-4">
+                <h2 className="font-bold text-[#182230]">Pending invitations</h2>
+                <p className="mt-1 text-xs text-[#98a2b3]">Invitations expire after 7 days.</p>
+              </div>
+              {invitations.length === 0 ? (
+                <p className="p-6 text-sm text-[#98a2b3]">No pending invitations.</p>
+              ) : (
+                <div className="divide-y divide-[#f2f4f7]">
+                  {invitations.map((invitation) => (
+                    <div key={invitation.invitationId} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-[#344054]">{invitation.invitedEmail}</p>
+                        <p className="mt-1 text-xs capitalize text-[#98a2b3]">Role: {invitation.role} · Expires {formatDate(invitation.expiresAt)}</p>
+                      </div>
+                      <button type="button" onClick={() => copyInviteLink(invitation.invitationId)} disabled={!canManageUsers} className="rounded-lg border border-[#d0d5dd] px-3 py-2 text-xs font-semibold text-[#344054] disabled:opacity-40">Copy invite link</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+        </main>
+      </div>
+    </AuthGate>
+  );
 }
