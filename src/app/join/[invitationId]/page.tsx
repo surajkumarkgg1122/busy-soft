@@ -56,8 +56,10 @@ export default function JoinBusinessPage() {
         const now = Timestamp.now();
         tx.update(invitationRef, { status: accept ? "accepted" : "rejected", respondedAt: now });
         if (accept) {
-          const member: BusinessMember = { uid, role: current.role, status: "active", permissions: current.permissions, joinedAt: now, invitedBy: current.invitedBy, invitationId: current.invitationId };
-          const index: UserBusinessMembership = { ...member, businessId: current.businessId };
+          const name = user?.displayName?.trim() || firebaseAuth.currentUser.email?.split("@")[0] || "User";
+          const email = firebaseAuth.currentUser.email || current.invitedEmail;
+          const member: BusinessMember & { name: string; email: string } = { uid, role: current.role, status: "active", permissions: current.permissions, joinedAt: now, invitedBy: current.invitedBy, invitationId: current.invitationId, name, email };
+          const index: UserBusinessMembership & { name: string; email: string } = { ...member, businessId: current.businessId };
           tx.set(memberRef, member);
           tx.set(userMembershipRef, index);
         }
