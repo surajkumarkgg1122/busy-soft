@@ -101,6 +101,7 @@ export const navigation: NavigationItem[] = [
       { label: "Cash Book", href: "/reports/cash-book" },
       { label: "Bank Book", href: "/reports/bank-book" },
       { label: "Day Book", href: "/reports/day-book" },
+      { label: "All Transactions", href: "/reports/all-transactions" },
       { label: "Profit & Loss", href: "/reports/profit-loss" },
       { label: "Balance Sheet", href: "/reports/balance-sheet" },
     ],
