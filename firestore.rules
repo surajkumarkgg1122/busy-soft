@@ -39,7 +39,11 @@ service cloud.firestore {
               && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending'
             )
           );
-        allow update, delete: if false;
+        allow update: if ownerOrAdmin(businessId)
+          && resource.data.role != 'owner'
+          && request.resource.data.uid == userId
+          && request.resource.data.businessId == businessId;
+        allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
       }
     }
 
@@ -94,8 +98,8 @@ service cloud.firestore {
             && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending'
             && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.role == request.resource.data.role
           );
-        allow update: if ownerOrAdmin(businessId);
-        allow delete: if ownerOrAdmin(businessId);
+        allow update: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
+        allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
       }
 
       match /settings/{settingId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if ownerOrAdmin(businessId); }
