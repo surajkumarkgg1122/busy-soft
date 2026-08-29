@@ -2,7 +2,6 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-
     function signedIn() { return request.auth != null; }
     function isUser(userId) { return signedIn() && request.auth.uid == userId; }
     function isBusinessMember(businessId) {
@@ -13,8 +12,14 @@ service cloud.firestore {
     function memberRole(businessId) { return get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.role; }
     function hasRole(businessId, roles) { return isBusinessMember(businessId) && memberRole(businessId) in roles; }
     function hasPermission(businessId, permission) {
-      return isBusinessMember(businessId)
-        && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.permissions[permission] == true;
+      return isBusinessMember(businessId) && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.permissions[permission] == true;
+    }
+    function hasPermissionAction(businessId, module, action, legacyPermission) {
+      return isBusinessMember(businessId) && (
+        memberRole(businessId) in ['owner', 'admin']
+        || get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.permissions.get(module, {}).get(action, false) == true
+        || (action == 'view' && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.permissions.get(legacyPermission, false) == true)
+      );
     }
     function ownerOrAdmin(businessId) { return hasRole(businessId, ['owner', 'admin']); }
 
@@ -23,91 +28,57 @@ service cloud.firestore {
       allow create: if isUser(userId);
       allow update: if isUser(userId);
       allow delete: if false;
-
       match /businessMemberships/{businessId} {
         allow read: if isUser(userId);
-        allow create: if isUser(userId)
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.businessId == businessId
-          && request.resource.data.status == 'active'
-          && (
-            !request.resource.data.keys().hasAny(['invitationId'])
-            || (
-              exists(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId))
-              && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.businessId == businessId
-              && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.invitedEmail == request.auth.token.email
-              && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending'
-            )
-          );
-        allow update: if ownerOrAdmin(businessId)
-          && resource.data.role != 'owner'
-          && request.resource.data.uid == userId
-          && request.resource.data.businessId == businessId;
+        allow create: if isUser(userId) && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == businessId && request.resource.data.status == 'active' && (!request.resource.data.keys().hasAny(['invitationId']) || (exists(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)) && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.businessId == businessId && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.invitedEmail == request.auth.token.email && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending'));
+        allow update: if ownerOrAdmin(businessId) && resource.data.role != 'owner' && request.resource.data.uid == userId && request.resource.data.businessId == businessId;
         allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
       }
     }
 
-    match /licenses/{licenseId} {
-      allow read: if signedIn() && resource.data.businessId != null && isBusinessMember(resource.data.businessId);
-      allow create, update, delete: if false;
-    }
-
+    match /licenses/{licenseId} { allow read: if signedIn() && resource.data.businessId != null && isBusinessMember(resource.data.businessId); allow create, update, delete: if false; }
     match /invitations/{invitationId} {
-      allow create: if signedIn()
-        && request.resource.data.invitationId == invitationId
-        && request.resource.data.status == 'pending'
-        && request.resource.data.invitedBy == request.auth.uid
-        && ownerOrAdmin(request.resource.data.businessId);
-      allow read: if signedIn()
-        && (request.auth.token.email == resource.data.invitedEmail || ownerOrAdmin(resource.data.businessId));
-      allow update: if signedIn()
-        && (
-          ownerOrAdmin(resource.data.businessId)
-          || (
-            request.auth.token.email == resource.data.invitedEmail
-            && resource.data.status == 'pending'
-            && request.resource.data.businessId == resource.data.businessId
-            && request.resource.data.invitedEmail == resource.data.invitedEmail
-            && request.resource.data.status in ['accepted', 'rejected']
-          )
-        );
+      allow create: if signedIn() && request.resource.data.invitationId == invitationId && request.resource.data.status == 'pending' && request.resource.data.invitedBy == request.auth.uid && ownerOrAdmin(request.resource.data.businessId);
+      allow read: if signedIn() && (request.auth.token.email == resource.data.invitedEmail || ownerOrAdmin(resource.data.businessId));
+      allow update: if signedIn() && (ownerOrAdmin(resource.data.businessId) || (request.auth.token.email == resource.data.invitedEmail && resource.data.status == 'pending' && request.resource.data.businessId == resource.data.businessId && request.resource.data.invitedEmail == resource.data.invitedEmail && request.resource.data.status in ['accepted', 'rejected']));
       allow delete: if signedIn() && ownerOrAdmin(resource.data.businessId);
     }
 
     match /businesses/{businessId} {
       allow read: if isBusinessMember(businessId);
-      allow create: if signedIn()
-        && request.resource.data.businessId == businessId
-        && request.resource.data.ownerId == request.auth.uid
-        && request.resource.data.status == 'active';
+      allow create: if signedIn() && request.resource.data.businessId == businessId && request.resource.data.ownerId == request.auth.uid && request.resource.data.status == 'active';
       allow update: if ownerOrAdmin(businessId);
       allow delete: if hasRole(businessId, ['owner']);
-
       match /members/{userId} {
         allow read: if isBusinessMember(businessId);
-        allow create: if ownerOrAdmin(businessId)
-          || (
-            signedIn()
-            && userId == request.auth.uid
-            && request.resource.data.uid == request.auth.uid
-            && request.resource.data.status == 'active'
-            && request.resource.data.invitationId != null
-            && exists(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId))
-            && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.businessId == businessId
-            && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.invitedEmail == request.auth.token.email
-            && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending'
-            && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.role == request.resource.data.role
-          );
+        allow create: if ownerOrAdmin(businessId) || (signedIn() && userId == request.auth.uid && request.resource.data.uid == request.auth.uid && request.resource.data.status == 'active' && request.resource.data.invitationId != null && exists(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)) && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.businessId == businessId && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.invitedEmail == request.auth.token.email && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending' && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.role == request.resource.data.role);
         allow update: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
         allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
       }
-
       match /settings/{settingId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if ownerOrAdmin(businessId); }
-      match /customers/{customerId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
+      match /customers/{customerId} {
+        allow read: if isBusinessMember(businessId);
+        allow create: if hasPermissionAction(businessId, 'parties', 'create', 'sales');
+        allow update: if hasPermissionAction(businessId, 'parties', 'edit', 'sales')
+          || ((hasPermissionAction(businessId, 'sales', 'create', 'sales') || hasPermissionAction(businessId, 'sales', 'edit', 'sales') || hasPermissionAction(businessId, 'sales', 'delete', 'sales')) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'updatedAt']));
+        allow delete: if ownerOrAdmin(businessId) || hasPermissionAction(businessId, 'parties', 'delete', 'sales');
+      }
       match /suppliers/{supplierId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'purchases'); allow delete: if ownerOrAdmin(businessId); }
-      match /items/{itemId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'inventory'); allow delete: if ownerOrAdmin(businessId); }
+      match /items/{itemId} {
+        allow read: if isBusinessMember(businessId);
+        allow create: if hasPermissionAction(businessId, 'inventory', 'create', 'inventory');
+        allow update: if hasPermissionAction(businessId, 'inventory', 'edit', 'inventory')
+          || ((hasPermissionAction(businessId, 'sales', 'create', 'sales') || hasPermissionAction(businessId, 'sales', 'edit', 'sales') || hasPermissionAction(businessId, 'sales', 'delete', 'sales')) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt']));
+        allow delete: if ownerOrAdmin(businessId) || hasPermissionAction(businessId, 'items', 'delete', 'inventory');
+      }
       match /categories/{categoryId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasPermission(businessId, 'inventory'); }
       match /units/{unitId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasPermission(businessId, 'inventory'); }
+      match /sales/{saleId} {
+        allow read: if hasPermissionAction(businessId, 'sales', 'view', 'sales');
+        allow create: if hasPermissionAction(businessId, 'sales', 'create', 'sales');
+        allow update: if hasPermissionAction(businessId, 'sales', 'edit', 'sales');
+        allow delete: if hasPermissionAction(businessId, 'sales', 'delete', 'sales');
+      }
       match /invoices/{invoiceId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
       match /quotations/{quotationId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
       match /salesOrders/{orderId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
