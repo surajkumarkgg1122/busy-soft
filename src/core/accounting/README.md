@@ -1,79 +1,85 @@
-# BUSY Soft Accounting Core
+# BUSY Soft Accounting Core v1
 
 This directory is the domain layer for BUSY Soft. UI pages must not calculate balances, mutate stock, or write ledger documents directly.
 
-## Rules
+## v1 invariants
 
 1. Money is stored as integer minor units (INR = paise).
 2. Every posted voucher is double-entry and must balance: total debit === total credit.
 3. Posted vouchers are immutable. Corrections use reversal/correcting vouchers.
-4. Party balances are derived from ledger entries; never treat `party.balance` as accounting truth.
-5. Stock is derived from `stockMovements`; an item `stock` field may only be a cache.
+4. Party balances are derived from ledger entries; `party.balance` is only a cache.
+5. Stock is derived from stock movements; an item `stock` field is only a cache.
 6. Financial-year lock blocks posting and reversal.
 7. Voucher numbers are allocated transactionally by `(business, financialYear, voucherType)`.
-8. Sale/purchase posting and stock movements are committed in one repository transaction.
-9. Reports must read vouchers/ledger/stock ledgers, not reconstruct accounting from UI documents.
-10. Audit events belong to the same transaction as the business operation.
+8. Sale/purchase posting and their stock movements are committed in one repository transaction.
+9. Reports read accounting ledgers rather than reconstructing accounting from UI documents.
+10. Audit events are part of the accounting transaction.
+11. Account IDs and financial years are business-scoped.
+12. Allocation amounts may never exceed the outstanding amount being allocated.
+13. FIFO and weighted-average valuation reject negative stock.
 
 ## Modules
 
-- `types.ts` - domain contracts and storage-independent entities.
-- `ledger.ts` - double-entry validation, account balances and party balances.
-- `voucher.ts` - voucher posting, numbering, financial-year checks and reversal.
-- `transactions.ts` - journal, receipt, payment, contra, expense, opening, sale and purchase.
+- `types.ts` - storage-independent domain contracts.
+- `money.ts` - safe minor-unit money and quantity primitives.
+- `accounts.ts` - chart/account validation and hierarchy rules.
+- `ledger.ts` - double-entry validation and balances.
+- `voucher.ts` - posting, numbering, financial-year checks and reversal.
+- `transactions.ts` - journal, receipt, payment, contra, opening, expense, sale and purchase.
 - `returns.ts` - sale and purchase returns with stock movements.
-- `inventory.ts` - stock movement and stock balance calculations.
+- `inventory.ts` - stock movement and basic stock balance.
+- `valuation.ts` - FIFO and weighted-average ending inventory valuation.
 - `gst.ts` - deterministic CGST/SGST/IGST/cess calculation.
-- `firestoreRepository.ts` - business-scoped Firestore adapter. Treat this as a transitional adapter; production posting should move behind a trusted service before exposing unrestricted accounting writes to browsers.
-- `inMemoryRepository.ts` and `selfTest.ts` - domain smoke-test support.
+- `party.ts` - party allocation and outstanding primitives.
+- `reports.ts` - trial balance, P&L, balance sheet and party statement.
+- `reconciliation.ts` - trial-balance and balance-sheet invariants.
+- `firestoreRepository.ts` - Firestore persistence adapter.
+- `inMemoryRepository.ts` - deterministic domain-test adapter.
+- `selfTest.ts` / `testCases.ts` - smoke and invariant test support.
 
-## Required account setup
+## Accounting boundaries
 
-A business should have system accounts such as:
+The core deliberately does not silently invent GST/HSN/place-of-supply policy, inventory valuation policy, or account mappings. Application configuration must supply these explicitly.
 
-- Cash
-- Bank accounts
-- Customers / Sundry Debtors control
-- Suppliers / Sundry Creditors control
-- Sales
-- Purchase
-- Inventory
-- Cost of Goods Sold
-- Output CGST / SGST / IGST / Cess
-- Input CGST / SGST / IGST / Cess
-- Opening Balance Equity
-- Expense groups
+The browser must not be trusted as the final accounting authority. Production deployment should put accounting commands behind a trusted server/Electron-main boundary and enforce business membership + permissions there.
 
-The transaction builders receive concrete account IDs through `AccountMap`; this avoids hard-coding IDs into UI components.
+## Transaction rule
 
-## Sale example
+A business operation is complete only when its document, voucher, ledger entries, stock movements, party allocations and audit event are committed atomically. The repository contract is therefore intentionally extensible; document persistence must be included by the application transaction when a module is migrated.
 
-A credit sale of taxable value Rs. 10,000 with 18% intra-state GST produces:
+## Supported transaction shapes
 
-- Customer Dr 11,800
-- Sales Cr 10,000
-- Output CGST Cr 900
-- Output SGST Cr 900
+### Credit sale
 
-If COGS is Rs. 6,000, the same voucher also posts:
+- Customer Dr total
+- Sales Cr taxable value
+- Output GST Cr
+- COGS Dr / Inventory Cr when cost is supplied
+- Stock OUT
 
-- COGS Dr 6,000
-- Inventory Cr 6,000
+### Sales return
 
-and the stock engine records the item quantities as OUT.
+- Sales Return Dr taxable value
+- Output GST Dr
+- Customer Cr total
+- Stock IN
 
-## Integration pattern
+### Purchase
 
-```text
-React page
-  -> application service
-    -> accounting core
-      -> repository transaction
-        -> voucher + voucher lines + ledger entries + stock movements + audit
-```
+- Purchase Dr taxable value
+- Input GST Dr
+- Supplier Cr total
+- Stock IN
 
-Never call Firestore directly from a sales page for accounting state after migration. The page should submit a command to an application service.
+### Payment / receipt
 
-## Future Electron + SQLite
+- Payment: expense/party Dr, cash/bank Cr
+- Receipt: cash/bank Dr, party Cr
 
-The accounting core intentionally contains no Firebase-specific types. The same `AccountingRepository` contract can be implemented by SQLite/Drizzle for the Electron desktop application, while the Firestore adapter can remain a cloud/sync adapter.
+## Testing expectation
+
+`runAccountingInvariantTests()` covers balanced/unbalanced vouchers, GST, party allocation, FIFO and weighted-average valuation. These are domain smoke tests; the project must add a real test runner before CI can enforce them automatically.
+
+## Electron + SQLite
+
+The accounting core has no Firebase-specific types. A SQLite/Drizzle repository can implement the same contracts for Electron, while Firestore remains a cloud/sync adapter.
