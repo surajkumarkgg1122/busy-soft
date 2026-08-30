@@ -1,20 +1,15 @@
-import type { LedgerEntry, Money } from "./types";
+import type { AccountingTransaction, LedgerEntry, Money, PartyAllocation, Voucher } from "./types";
 import { ValidationError } from "./errors";
 
-export interface PartyAllocation { id: string; businessId: string; partyId: string; fromVoucherId: string; toVoucherId: string; amount: Money; date: string; createdBy: string; createdAt: string; }
-export interface OutstandingDocument { voucherId: string; voucherNumber: string; date: string; dueDate?: string; original: Money; allocated: Money; outstanding: Money; }
+export interface OutstandingDocument { voucherId:string; voucherNumber:string; date:string; dueDate?:string; original:Money; allocated:Money; outstanding:Money; }
+export function validateAllocation(input:Omit<PartyAllocation,"id">):void{if(!input.businessId||!input.partyId||!input.fromVoucherId||!input.toVoucherId||input.fromVoucherId===input.toVoucherId)throw new ValidationError("Invalid party allocation references.");if(!Number.isSafeInteger(input.amount)||input.amount<=0)throw new ValidationError("Allocation amount must be a positive integer minor-unit amount.");if(!/^\d{4}-\d{2}-\d{2}$/.test(input.date))throw new ValidationError("Allocation date must be YYYY-MM-DD.");}
+export function calculatePartyNet(entries:readonly Pick<LedgerEntry,"partyId"|"debit"|"credit">[],partyId:string):Money{return entries.filter(e=>e.partyId===partyId).reduce((s,e)=>s+e.debit-e.credit,0);}
+export function allocateAgainstOutstanding(requested:Money,documents:readonly OutstandingDocument[]):{allocations:Array<{voucherId:string;amount:Money}>;unallocated:Money}{if(!Number.isSafeInteger(requested)||requested<0)throw new ValidationError("Requested allocation must be non-negative.");let remaining=requested;const allocations:Array<{voucherId:string;amount:Money}>=[];for(const d of documents){if(!Number.isSafeInteger(d.outstanding)||d.outstanding<0)throw new ValidationError(`Invalid outstanding amount for ${d.voucherNumber}.`);if(remaining<=0)break;if(d.outstanding<=0)continue;const amount=Math.min(remaining,d.outstanding);allocations.push({voucherId:d.voucherId,amount});remaining-=amount;}return{allocations,unallocated:remaining};}
 
-export function validateAllocation(input: Omit<PartyAllocation, "id">): void {
-  if (!input.businessId || !input.partyId || !input.fromVoucherId || !input.toVoucherId || input.fromVoucherId === input.toVoucherId) throw new ValidationError("Invalid party allocation references.");
-  if (!Number.isSafeInteger(input.amount) || input.amount <= 0) throw new ValidationError("Allocation amount must be a positive integer minor-unit amount.");
-}
-
-export function calculatePartyNet(entries: readonly Pick<LedgerEntry,"partyId"|"debit"|"credit">[], partyId: string): Money { return entries.filter(e=>e.partyId===partyId).reduce((s,e)=>s+e.debit-e.credit,0); }
-
-export function allocateAgainstOutstanding(requested: Money, documents: readonly OutstandingDocument[]): { allocations: Array<{voucherId:string;amount:Money}>; unallocated: Money } {
-  if (!Number.isSafeInteger(requested) || requested < 0) throw new ValidationError("Requested allocation must be non-negative.");
-  let remaining = requested;
-  const allocations: Array<{voucherId:string;amount:Money}> = [];
-  for (const d of documents) { if (remaining <= 0) break; if (d.outstanding <= 0) continue; const amount=Math.min(remaining,d.outstanding); allocations.push({voucherId:d.voucherId,amount}); remaining-=amount; }
-  return { allocations, unallocated: remaining };
+export async function validateAndBuildAllocations(tx:AccountingTransaction,input:{businessId:string;partyId:string;fromVoucherId:string;toVoucherId:string;amount:Money;date:string;userId:string;id:string;createdAt:string}):Promise<PartyAllocation>{
+ validateAllocation(input);const from=await tx.getVoucher(input.fromVoucherId);const to=await tx.getVoucher(input.toVoucherId);if(!from||!to)throw new ValidationError("Both allocation vouchers must exist.");if(from.businessId!==input.businessId||to.businessId!==input.businessId)throw new ValidationError("Allocation voucher business mismatch.");if(from.status!=="posted"||to.status!=="posted")throw new ValidationError("Only posted vouchers can be allocated.");
+ const fromLines=await tx.getVoucherLines(from.id);const toLines=await tx.getVoucherLines(to.id);const fromParty=fromLines.filter(l=>l.partyId===input.partyId).reduce((s,l)=>s+l.debit-l.credit,0);const toParty=toLines.filter(l=>l.partyId===input.partyId).reduce((s,l)=>s+l.debit-l.credit,0);if(fromParty===0||toParty===0||Math.sign(fromParty)===Math.sign(toParty))throw new ValidationError("Allocation requires opposite outstanding party directions.");
+ const previous=await tx.getPartyAllocationsForVoucher(input.fromVoucherId);const used=previous.filter(a=>a.partyId===input.partyId).reduce((s,a)=>s+a.amount,0);if(used+input.amount>Math.abs(fromParty))throw new ValidationError("Allocation exceeds the source voucher outstanding amount.");
+ const targetPrevious=await tx.getPartyAllocationsForVoucher(input.toVoucherId);const targetUsed=targetPrevious.filter(a=>a.partyId===input.partyId).reduce((s,a)=>s+a.amount,0);if(targetUsed+input.amount>Math.abs(toParty))throw new ValidationError("Allocation exceeds the target voucher outstanding amount.");
+ return{id:input.id,businessId:input.businessId,partyId:input.partyId,fromVoucherId:input.fromVoucherId,toVoucherId:input.toVoucherId,amount:input.amount,date:input.date,createdBy:input.userId,createdAt:input.createdAt};
 }
