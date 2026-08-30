@@ -6,6 +6,7 @@ export * from "./inventory";
 export * from "./voucher";
 export * from "./transactions";
 export * from "./returns";
+export * from "./reports";
 export * from "./firestoreRepository";
 export * from "./inMemoryRepository";
 export * from "./selfTest";
