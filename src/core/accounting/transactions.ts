@@ -28,6 +28,20 @@ export async function postPayment(repo: AccountingRepository, base: BaseTransact
   return postJournal(repo, base, [debit(base.accountId, base.amount, { partyId: base.partyId }), credit(creditAccount, base.amount)], deps, "PAYMENT", "PY");
 }
 
+export async function postContra(repo: AccountingRepository, base: BaseTransaction & { fromAccountId: string; toAccountId: string; amount: Money }, deps: TransactionDeps): Promise<PostingResult> {
+  positive(base.amount, "Contra amount");
+  if (base.fromAccountId === base.toAccountId) throw new ValidationError("Contra accounts must be different.");
+  return postJournal(repo, base, [debit(base.toAccountId, base.amount), credit(base.fromAccountId, base.amount)], deps, "CONTRA", "CT");
+}
+
+/** Posts an opening balance as a normal double-entry voucher. The offset is normally Opening Balance Equity. */
+export async function postOpeningBalance(repo: AccountingRepository, base: BaseTransaction & { debitLines: LineAmount[]; creditLines: LineAmount[] }, deps: TransactionDeps): Promise<PostingResult> {
+  const lines = [...base.debitLines.map(x => debit(x.accountId, x.amount, { partyId: x.partyId, description: x.description })), ...base.creditLines.map(x => credit(x.accountId, x.amount, { partyId: x.partyId, description: x.description }))];
+  if (lines.length < 2) throw new ValidationError("Opening balance requires debit and credit lines.");
+  return postJournal(repo, base, lines, deps, "OPENING", "OB");
+}
+
+export interface LineAmount { accountId: string; amount: Money; partyId?: string; description?: string; }
 export async function postExpense(repo: AccountingRepository, base: BaseTransaction & { expenseAccountId: string; amount: Money; mode: "cash" | "bank"; accountMap: AccountMap }, deps: TransactionDeps): Promise<PostingResult> {
   positive(base.amount, "Expense amount");
   const creditAccount = required(base.mode === "cash" ? base.accountMap.cash : base.accountMap.bank, `${base.mode} account`);
