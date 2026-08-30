@@ -1,60 +1,17 @@
 import type { Account, LedgerEntry, Money } from "./types";
 import { accountNormalBalance, calculateAccountBalance } from "./ledger";
-
-export interface TrialBalanceRow { accountId: string; code: string; name: string; debit: Money; credit: Money; balance: Money; }
-export interface TrialBalance { rows: TrialBalanceRow[]; totalDebit: Money; totalCredit: Money; }
-export interface ProfitLoss { income: Money; expense: Money; profit: Money; }
-export interface BalanceSheet { assets: Money; liabilities: Money; equity: Money; currentProfit: Money; totalLiabilitiesAndEquity: Money; difference: Money; }
-export interface PartyStatementLine { date: string; voucherType: string; voucherNumber: string; description?: string; debit: Money; credit: Money; runningBalance: Money; voucherId: string; }
-
-function entriesFor(entries: readonly LedgerEntry[], accountId: string): LedgerEntry[] { return entries.filter(e => e.accountId === accountId); }
-
-export function buildTrialBalance(accounts: readonly Account[], entries: readonly LedgerEntry[]): TrialBalance {
-  const rows = accounts.filter(a => a.active).map(account => {
-    const own = entriesFor(entries, account.id);
-    const debit = account.openingDebit + own.reduce((s, e) => s + e.debit, 0);
-    const credit = account.openingCredit + own.reduce((s, e) => s + e.credit, 0);
-    const balance = accountNormalBalance(account.type) === "debit" ? debit - credit : credit - debit;
-    return { accountId: account.id, code: account.code, name: account.name, debit: Math.max(balance, 0), credit: Math.max(-balance, 0), balance };
-  });
-  return { rows, totalDebit: rows.reduce((s, r) => s + r.debit, 0), totalCredit: rows.reduce((s, r) => s + r.credit, 0) };
-}
-
-export function buildProfitLoss(accounts: readonly Account[], entries: readonly LedgerEntry[]): ProfitLoss {
-  let income = 0;
-  let expense = 0;
-  for (const account of accounts) {
-    if (account.type !== "income" && account.type !== "expense") continue;
-    const balance = calculateAccountBalance(account, entriesFor(entries, account.id));
-    if (account.type === "income") income += balance;
-    else expense += balance;
-  }
-  return { income, expense, profit: income - expense };
-}
-
-export function buildBalanceSheet(accounts: readonly Account[], entries: readonly LedgerEntry[]): BalanceSheet {
-  let assets = 0;
-  let liabilities = 0;
-  let equity = 0;
-  for (const account of accounts) {
-    const balance = calculateAccountBalance(account, entriesFor(entries, account.id));
-    if (account.type === "asset") assets += balance;
-    else if (account.type === "liability") liabilities += balance;
-    else if (account.type === "equity") equity += balance;
-  }
-  const currentProfit = buildProfitLoss(accounts, entries).profit;
-  const totalLiabilitiesAndEquity = liabilities + equity + currentProfit;
-  return { assets, liabilities, equity, currentProfit, totalLiabilitiesAndEquity, difference: assets - totalLiabilitiesAndEquity };
-}
-
-/** Opening is calculated only from ledger entries before `fromDate`; it never uses a mutable party.balance field. */
-export function buildPartyStatement(entries: readonly LedgerEntry[], partyId: string, fromDate: string, toDate: string): { opening: Money; lines: PartyStatementLine[]; closing: Money } {
-  const partyEntries = entries.filter(e => e.partyId === partyId).sort((a, b) => `${a.date}:${a.lineNo}`.localeCompare(`${b.date}:${b.lineNo}`));
-  const opening = partyEntries.filter(e => e.date < fromDate).reduce((s, e) => s + e.debit - e.credit, 0);
-  let running = opening;
-  const lines = partyEntries.filter(e => e.date >= fromDate && e.date <= toDate).map(e => {
-    running += e.debit - e.credit;
-    return { date: e.date, voucherType: e.voucherType, voucherNumber: e.voucherNumber, description: e.description, debit: e.debit, credit: e.credit, runningBalance: running, voucherId: e.voucherId };
-  });
-  return { opening, lines, closing: running };
-}
+import { ValidationError } from "./errors";
+export interface ReportPeriod{fromDate?:string;toDate?:string;}
+export interface TrialBalanceRow{accountId:string;code:string;name:string;debit:Money;credit:Money;balance:Money;}
+export interface TrialBalance{rows:TrialBalanceRow[];totalDebit:Money;totalCredit:Money;difference:Money;balanced:boolean;}
+export interface ProfitLoss{income:Money;expense:Money;profit:Money;}
+export interface BalanceSheet{assets:Money;liabilities:Money;equity:Money;currentProfit:Money;totalLiabilitiesAndEquity:Money;difference:Money;balanced:boolean;}
+export interface PartyStatementLine{date:string;voucherType:string;voucherNumber:string;description?:string;debit:Money;credit:Money;runningBalance:Money;voucherId:string;}
+function periodEntries(entries:readonly LedgerEntry[],p:ReportPeriod={}){if(p.fromDate&&p.toDate&&p.fromDate>p.toDate)throw new ValidationError("Report fromDate cannot be after toDate.");return entries.filter(e=>(!p.fromDate||e.date>=p.fromDate)&&(!p.toDate||e.date<=p.toDate));}
+function entriesFor(entries:readonly LedgerEntry[],accountId:string){return entries.filter(e=>e.accountId===accountId);}
+export function buildTrialBalance(accounts:readonly Account[],entries:readonly LedgerEntry[],period:ReportPeriod={}):TrialBalance{const ownEntries=periodEntries(entries,period);const rows=accounts.filter(a=>a.active).map(a=>{const own=entriesFor(ownEntries,a.id);const debit=a.openingDebit+own.reduce((s,e)=>s+e.debit,0);const credit=a.openingCredit+own.reduce((s,e)=>s+e.credit,0);const balance=accountNormalBalance(a.type)==="debit"?debit-credit:credit-debit;return{accountId:a.id,code:a.code,name:a.name,debit:Math.max(balance,0),credit:Math.max(-balance,0),balance};});const totalDebit=rows.reduce((s,r)=>s+r.debit,0),totalCredit=rows.reduce((s,r)=>s+r.credit,0),difference=totalDebit-totalCredit;return{rows,totalDebit,totalCredit,difference,balanced:difference===0};}
+export function buildProfitLoss(accounts:readonly Account[],entries:readonly LedgerEntry[],period:ReportPeriod={}):ProfitLoss{const ownEntries=periodEntries(entries,period);let income=0,expense=0;for(const a of accounts){if(a.type!=="income"&&a.type!=="expense")continue;const own=entriesFor(ownEntries,a.id);const debit=own.reduce((s,e)=>s+e.debit,0),credit=own.reduce((s,e)=>s+e.credit,0);const balance=accountNormalBalance(a.type)==="debit"?debit-credit:credit-debit;if(a.type==="income")income+=balance;else expense+=balance;}return{income,expense,profit:income-expense};}
+export function buildBalanceSheet(accounts:readonly Account[],entries:readonly LedgerEntry[],period:ReportPeriod={}):BalanceSheet{const ownEntries=periodEntries(entries,period);let assets=0,liabilities=0,equity=0;for(const a of accounts){const balance=calculateAccountBalance(a,entriesFor(ownEntries,a.id));if(a.type==="asset")assets+=balance;else if(a.type==="liability")liabilities+=balance;else if(a.type==="equity")equity+=balance;}const currentProfit=buildProfitLoss(accounts,ownEntries).profit;const totalLiabilitiesAndEquity=liabilities+equity+currentProfit,difference=assets-totalLiabilitiesAndEquity;return{assets,liabilities,equity,currentProfit,totalLiabilitiesAndEquity,difference,balanced:difference===0};}
+export interface Reconciliation{trialBalanceDifference:Money;balanceSheetDifference:Money;profit:Money;balanced:boolean;}
+export function reconcileAccounting(accounts:readonly Account[],entries:readonly LedgerEntry[],period:ReportPeriod={}):Reconciliation{const tb=buildTrialBalance(accounts,entries,period),pl=buildProfitLoss(accounts,entries,period),bs=buildBalanceSheet(accounts,entries,period);return{trialBalanceDifference:tb.difference,balanceSheetDifference:bs.difference,profit:pl.profit,balanced:tb.balanced&&bs.balanced};}
+export function buildPartyStatement(entries:readonly LedgerEntry[],partyId:string,fromDate:string,toDate:string):{opening:Money;lines:PartyStatementLine[];closing:Money}{if(fromDate>toDate)throw new ValidationError("Party statement fromDate cannot be after toDate.");const partyEntries=entries.filter(e=>e.partyId===partyId).sort((a,b)=>`${a.date}:${a.lineNo}:${a.voucherId}`.localeCompare(`${b.date}:${b.lineNo}:${b.voucherId}`));const opening=partyEntries.filter(e=>e.date<fromDate).reduce((s,e)=>s+e.debit-e.credit,0);let running=opening;const lines=partyEntries.filter(e=>e.date>=fromDate&&e.date<=toDate).map(e=>{running+=e.debit-e.credit;return{date:e.date,voucherType:e.voucherType,voucherNumber:e.voucherNumber,description:e.description,debit:e.debit,credit:e.credit,runningBalance:running,voucherId:e.voucherId};});return{opening,lines,closing:running};}
