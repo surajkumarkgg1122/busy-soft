@@ -7,3 +7,5 @@ export * from "./voucher";
 export * from "./transactions";
 export * from "./returns";
 export * from "./firestoreRepository";
+export * from "./inMemoryRepository";
+export * from "./selfTest";
