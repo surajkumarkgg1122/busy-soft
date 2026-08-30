@@ -48,40 +48,43 @@ function Metric({ label, value, detail, tone = "white" }) {
   );
 }
 
-function StatisticsChart({ sales, loading }) {
+function StatisticsChart({ sales, expenses, loading }) {
   const [tab, setTab] = useState("Overview");
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   const chartData = useMemo(() => {
     const currentYear = new Date().getFullYear();
-    const result = months.map((label, month) => ({ label, sales: 0, revenue: 0, target: 0, month }));
+    const result = months.map((label, month) => ({ label, sales: 0, collections: 0, expenses: 0, month }));
+
     sales.forEach((sale) => {
       const date = dateValue(sale.invoiceDate || sale.createdAt);
       if (!date || date.getFullYear() !== currentYear) return;
-      const total = Number(sale.total || 0);
-      const collected = Number(sale.paid || sale.received || 0);
-      result[date.getMonth()].sales += total;
-      result[date.getMonth()].revenue += collected;
+      result[date.getMonth()].sales += Number(sale.total || 0);
+      result[date.getMonth()].collections += Number(sale.paid || sale.received || 0);
     });
 
-    // Keep the chart useful even for a newly-created business with sparse data.
-    // Targets are derived from the business's observed monthly activity rather than fake sales.
-    const observedMax = Math.max(...result.map((x) => x.sales), 0);
-    const fallback = observedMax || 25000;
-    result.forEach((x, index) => {
-      x.target = fallback * (0.62 + ((index * 7) % 5) * 0.07);
+    expenses.forEach((expense) => {
+      const date = dateValue(expense.date || expense.expenseDate || expense.createdAt);
+      if (!date || date.getFullYear() !== currentYear) return;
+      result[date.getMonth()].expenses += Number(expense.amount || expense.total || 0);
     });
+
     return result;
-  }, [sales]);
+  }, [sales, expenses]);
 
-  const activeKey = tab === "Revenue" ? "revenue" : "sales";
-  const secondaryKey = tab === "Sales" ? "target" : tab === "Revenue" ? "target" : "revenue";
-  const primary = chartData.map((x) => x[activeKey]);
+  const isRevenue = tab === "Revenue";
+  const primaryKey = "sales";
+  const secondaryKey = isRevenue ? "expenses" : "collections";
+  const primaryLabel = "Sales";
+  const secondaryLabel = isRevenue ? "Expenses" : "Collections";
+  const subtitle = isRevenue ? "Sales compared with expenses by month" : "Sales and customer collections by month";
+
+  const primary = chartData.map((x) => x[primaryKey]);
   const secondary = chartData.map((x) => x[secondaryKey]);
   const maxValue = Math.max(...primary, ...secondary, 1);
   const width = 1000;
   const height = 300;
-  const left = 10;
+  const left = 48;
   const right = 10;
   const top = 20;
   const bottom = 45;
@@ -90,13 +93,8 @@ function StatisticsChart({ sales, loading }) {
   const x = (index) => left + (index / (months.length - 1)) * plotWidth;
   const y = (value) => top + plotHeight - (value / maxValue) * plotHeight;
   const linePath = (key) => chartData.map((item, index) => `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ${y(item[key]).toFixed(2)}`).join(" ");
-  const areaPath = `${linePath(activeKey)} L ${x(months.length - 1)} ${top + plotHeight} L ${x(0)} ${top + plotHeight} Z`;
-  const dateLabel = (() => {
-    const end = new Date();
-    const start = new Date(end);
-    start.setDate(end.getDate() - 6);
-    return `${start.toLocaleDateString("en-IN", { month: "short", day: "2-digit" })} - ${end.toLocaleDateString("en-IN", { month: "short", day: "2-digit" })}`;
-  })();
+  const areaPath = `${linePath(primaryKey)} L ${x(months.length - 1)} ${top + plotHeight} L ${x(0)} ${top + plotHeight} Z`;
+  const dateLabel = `Jan 01 - Dec 31, ${new Date().getFullYear()}`;
 
   return (
     <article className="overflow-hidden rounded-2xl border border-[#e4e7ec] bg-white shadow-sm">
@@ -104,14 +102,16 @@ function StatisticsChart({ sales, loading }) {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-[#101828]">Statistics</h2>
-            <p className="mt-1 text-sm text-[#667085]">Target you’ve set for each month</p>
+            <p className="mt-1 text-sm text-[#667085]">{subtitle}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-lg bg-[#f2f4f7] p-1">
+            <div className="inline-flex rounded-lg bg-[#f2f4f7] p-1" role="tablist" aria-label="Statistics view">
               {["Overview", "Sales", "Revenue"].map((item) => (
                 <button
                   key={item}
                   type="button"
+                  role="tab"
+                  aria-selected={tab === item}
                   onClick={() => setTab(item)}
                   className={`rounded-md px-3 py-2 text-xs font-medium transition ${tab === item ? "bg-white text-[#101828] shadow-sm" : "text-[#667085] hover:text-[#344054]"}`}
                 >
@@ -119,21 +119,28 @@ function StatisticsChart({ sales, loading }) {
                 </button>
               ))}
             </div>
-            <button type="button" className="inline-flex h-10 items-center gap-2 rounded-lg border border-[#d0d5dd] bg-white px-3 text-xs font-semibold text-[#344054] shadow-sm">
+            <div className="inline-flex h-10 items-center gap-2 rounded-lg border border-[#d0d5dd] bg-white px-3 text-xs font-semibold text-[#344054] shadow-sm">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <rect x="3" y="4" width="18" height="17" rx="2" stroke="currentColor" strokeWidth="1.7" />
                 <path d="M8 2.5V6M16 2.5V6M3 9H21" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
               </svg>
               {dateLabel}
-            </button>
+            </div>
           </div>
         </div>
 
-        <div className="mt-6 h-[330px] w-full">
+        <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-[#667085]">
+          <span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#465fff]" />{primaryLabel}</span>
+          <span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#9bbcff]" />{secondaryLabel}</span>
+        </div>
+
+        <div className="mt-3 h-[330px] w-full">
           {loading ? (
-            <div className="flex h-full items-center justify-center text-sm text-[#98a2b3]">Loading statistics…</div>
+            <div className="flex h-full items-center justify-center text-sm text-[#98a2b3]" role="status">Loading statistics…</div>
           ) : (
-            <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full" role="img" aria-label="Monthly business statistics chart">
+            <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full" role="img" aria-label={`${primaryLabel} and ${secondaryLabel} monthly statistics chart`}>
+              <title>{`${primaryLabel} and ${secondaryLabel} monthly statistics`}</title>
+              <desc>{subtitle}. Values are shown in Indian rupees for January through December.</desc>
               <defs>
                 <linearGradient id="statisticsArea" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#465fff" stopOpacity="0.25" />
@@ -145,18 +152,21 @@ function StatisticsChart({ sales, loading }) {
                 const label = Math.round(maxValue * (1 - fraction));
                 return (
                   <g key={fraction}>
-                    <line x1={left + 35} x2={width - right} y1={yy} y2={yy} stroke="#edf0f5" strokeWidth="1" />
-                    <text x="0" y={yy + 4} fontSize="11" fill="#475467">{label >= 1000 ? `${Math.round(label / 1000)}k` : label}</text>
+                    <line x1={left} x2={width - right} y1={yy} y2={yy} stroke="#edf0f5" strokeWidth="1" />
+                    <text x="0" y={yy + 4} fontSize="11" fill="#475467">{label >= 1000000 ? `${(label / 1000000).toFixed(1)}M` : label >= 1000 ? `${Math.round(label / 1000)}k` : label}</text>
                   </g>
                 );
               })}
               <path d={areaPath} fill="url(#statisticsArea)" />
               <path d={linePath(secondaryKey)} fill="none" stroke="#9bbcff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              <path d={linePath(activeKey)} fill="none" stroke="#465fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              <path d={linePath(primaryKey)} fill="none" stroke="#465fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
               {chartData.map((item, index) => (
                 <g key={item.label}>
-                  <circle cx={x(index)} cy={y(item[activeKey])} r="3" fill="#465fff" opacity="0">
-                    <title>{`${item.label}: ${money(item[activeKey])}`}</title>
+                  <circle cx={x(index)} cy={y(item[primaryKey])} r="3.5" fill="#465fff" opacity="0">
+                    <title>{`${item.label}: ${primaryLabel} ${money(item[primaryKey])}`}</title>
+                  </circle>
+                  <circle cx={x(index)} cy={y(item[secondaryKey])} r="3.5" fill="#9bbcff" opacity="0">
+                    <title>{`${item.label}: ${secondaryLabel} ${money(item[secondaryKey])}`}</title>
                   </circle>
                   <text x={x(index)} y={height - 13} textAnchor="middle" fontSize="11" fill="#344054">{item.label}</text>
                 </g>
@@ -240,7 +250,7 @@ export default function DashboardPage() {
               <Metric label="Outstanding" value={loading ? "—" : money(outstanding)} detail={`${pending} invoices need follow-up`} tone="amber" />
             </section>
             <section className="mt-5">
-              <StatisticsChart sales={sales} loading={loading} />
+              <StatisticsChart sales={sales} expenses={expenses} loading={loading} />
             </section>
             <section className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(300px,.8fr)]">
               <article className="rounded-2xl border border-[#e4e7ec] bg-white p-5 shadow-sm sm:p-6">
