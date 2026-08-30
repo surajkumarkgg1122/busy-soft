@@ -7,6 +7,7 @@ export class InMemoryAccountingRepository implements AccountingRepository {
  async getVoucherLines(voucherId:string){return[...this.voucherLines.values()].filter(v=>v.voucherId===voucherId).sort((a,b)=>a.lineNo-b.lineNo);}
  async getVouchersByReference(referenceType:string,referenceId:string){return[...this.vouchers.values()].filter(v=>v.referenceType===referenceType&&v.referenceId===referenceId&&v.status==="posted");}
  async getVoucherByIdempotencyKey(_businessId:string,financialYearId:string,key:string){return[...this.vouchers.values()].find(v=>v.financialYearId===financialYearId&&v.idempotencyKey===key)??null;}
+ async getAtomicDocumentByIdempotencyKey(_businessId:string,financialYearId:string,key:string){return[...this.atomicDocuments.values()].find(v=>v.financialYearId===financialYearId&&v.idempotencyKey===key)??null;}
  async getStockMovementsForSource(sourceId:string){return[...this.stockMovements.values()].filter(m=>m.sourceId===sourceId);}
  async getStockMovementsForItem(itemId:string,warehouseId?:string,throughDate?:string){return[...this.stockMovements.values()].filter(m=>m.itemId===itemId&&(!warehouseId||m.warehouseId===warehouseId)&&(!throughDate||m.date<=throughDate)).sort((a,b)=>`${a.date}:${a.createdAt}:${a.id}`.localeCompare(`${b.date}:${b.createdAt}:${b.id}`));}
  async getPartyAllocationsForVoucher(voucherId:string){return[...this.partyAllocations.values()].filter(a=>a.fromVoucherId===voucherId||a.toVoucherId===voucherId);}
