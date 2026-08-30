@@ -1,0 +1,5 @@
+import type { AccountingRepository, PartyAllocation } from "./types";
+import { validateAndBuildAllocations } from "./party";
+import { ValidationError } from "./errors";
+export interface PartyAllocationDeps{ids:{next(prefix:string):string};clock:{now():string}}
+export async function allocatePartyAmount(repo:AccountingRepository,input:{businessId:string;partyId:string;fromVoucherId:string;toVoucherId:string;amount:number;date:string;userId:string},deps:PartyAllocationDeps):Promise<PartyAllocation>{if(!input.businessId||!input.partyId||!input.userId)throw new ValidationError("Business, party and user are required.");return repo.runInTransaction(async tx=>{const now=deps.clock.now();const allocation=await validateAndBuildAllocations(tx,{...input,id:deps.ids.next("alloc"),createdAt:now});await tx.savePartyAllocations([allocation]);await tx.saveAuditEvent({id:deps.ids.next("audit"),businessId:input.businessId,entityType:"partyAllocation",entityId:allocation.id,action:"ALLOCATE",userId:input.userId,timestamp:now,after:{fromVoucherId:input.fromVoucherId,toVoucherId:input.toVoucherId,amount:input.amount}});return allocation;});}
