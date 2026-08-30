@@ -14,6 +14,7 @@ export * from "./valuation";
 export * from "./reports";
 export * from "./reconciliation";
 export * from "./atomic";
+export * from "./authorization";
 export * from "./firestoreRepository";
 export * from "./inMemoryRepository";
 export * from "./selfTest";
