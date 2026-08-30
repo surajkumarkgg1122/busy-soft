@@ -1,3 +1,3 @@
 "use client";
 
-export { default } from "./page.core";
+export { default } from "./page.v2";
