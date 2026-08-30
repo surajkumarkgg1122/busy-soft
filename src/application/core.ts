@@ -1,6 +1,6 @@
 import { postSale, postPurchase } from "@/core/accounting/transactions";
 import { postSaleReturn, postPurchaseReturn } from "@/core/accounting/returns";
-import { authorizeAccountingCommand, type AuthorizationContext } from "@/core/accounting/authorization";
+import { assertAuthorized, assertTrustedPostingBoundary, type AccountingPermission } from "@/core/accounting/authorization";
 import { assertTrustedContext, type TrustedCommandContext } from "./context";
 import { normalizeApplicationError } from "./errors";
 
@@ -9,12 +9,21 @@ export type CommandContext = TrustedCommandContext;
 export interface ApplicationDeps { repo: import("@/core/accounting/types").AccountingRepository; ids: { next(prefix:string):string }; clock:{ now():string }; }
 export interface CommandResult<T=unknown> { value:T; idempotencyKey:string; }
 
+function requiredPermission(command: AccountingCommandName): AccountingPermission {
+  switch (command) {
+    case "SALE_CREATE": return "SALE_CREATE";
+    case "PURCHASE_CREATE": return "PURCHASE_CREATE";
+    case "RETURN_CREATE": return "RETURN_CREATE";
+  }
+}
+
 async function execute<T>(deps:ApplicationDeps, ctx:CommandContext, command:AccountingCommandName, action:()=>Promise<T>):Promise<CommandResult<T>> {
   try {
     assertTrustedContext(ctx);
-    authorizeAccountingCommand(ctx, command);
-    // Do not perform a non-atomic read/then-write here. The Accounting Core
-    // performs the idempotency check inside its repository transaction.
+    assertTrustedPostingBoundary(ctx);
+    assertAuthorized(ctx, requiredPermission(command));
+    // Idempotency is deliberately resolved inside the Core's atomic repository
+    // transaction. Never replace this with a client-side read/then-write check.
     const value = await action();
     return { value, idempotencyKey: ctx.idempotencyKey.trim() };
   } catch (error) {
