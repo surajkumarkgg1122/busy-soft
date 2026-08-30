@@ -179,7 +179,7 @@ function StatisticsChart({ sales, expenses, loading }) {
   );
 }
 
-export default function DashboardPage() {
+export default function Home() {
   const { activeBusinessId, activeBusiness, loading: businessLoading, can } = useBusiness();
   const [sales, setSales] = useState([]), [customers, setCustomers] = useState([]), [expenses, setExpenses] = useState([]), [items, setItems] = useState([]), [period, setPeriod] = useState("This month"), [loading, setLoading] = useState(true), [error, setError] = useState("");
   const canView = can("reports", "view") || can("sales", "view");
