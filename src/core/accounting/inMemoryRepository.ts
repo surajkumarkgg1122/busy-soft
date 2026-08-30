@@ -1,21 +1,17 @@
-import type { AccountingRepository, AccountingTransaction, Account, AuditEvent, FinancialYear, LedgerEntry, ReturnDocument, StockMovement, Voucher, VoucherLine } from "./types";
+import type { AccountingRepository, AccountingTransaction, Account, AuditEvent, FinancialYear, LedgerEntry, PartyAllocation, ReturnDocument, StockMovement, Voucher, VoucherLine } from "./types";
 import { ValidationError } from "./errors";
-
 export class InMemoryAccountingRepository implements AccountingRepository {
-  readonly financialYears = new Map<string, FinancialYear>(); readonly accounts = new Map<string, Account>(); readonly vouchers = new Map<string, Voucher>(); readonly voucherLines = new Map<string, VoucherLine>(); readonly ledgerEntries = new Map<string, LedgerEntry>(); readonly stockMovements = new Map<string, StockMovement>(); readonly returnDocuments = new Map<string, ReturnDocument>(); readonly auditLogs = new Map<string, AuditEvent>(); private readonly sequences = new Map<string, number>();
-  async runInTransaction<T>(work: (tx: AccountingTransaction) => Promise<T>): Promise<T> { return work(this); }
-  async getFinancialYear(id: string): Promise<FinancialYear | null> { return this.financialYears.get(id) ?? null; }
-  async getAccount(id: string): Promise<Account | null> { return this.accounts.get(id) ?? null; }
-  async getVoucher(id: string): Promise<Voucher | null> { return this.vouchers.get(id) ?? null; }
-  async getVoucherLines(voucherId: string): Promise<VoucherLine[]> { return [...this.voucherLines.values()].filter(v=>v.voucherId===voucherId).sort((a,b)=>a.lineNo-b.lineNo); }
-  async getVouchersByReference(referenceType:string,referenceId:string):Promise<Voucher[]> { return [...this.vouchers.values()].filter(v=>v.referenceType===referenceType&&v.referenceId===referenceId&&v.status==="posted"); }
-  async getStockMovementsForSource(sourceId:string):Promise<StockMovement[]> { return [...this.stockMovements.values()].filter(m=>m.sourceId===sourceId); }
-  async saveVoucher(voucher: Voucher): Promise<void> { this.vouchers.set(voucher.id,voucher); }
-  async saveVoucherLines(lines: VoucherLine[]): Promise<void> { for(const line of lines)this.voucherLines.set(line.lineId,line); }
-  async saveLedgerEntries(entries: LedgerEntry[]): Promise<void> { for(const entry of entries)this.ledgerEntries.set(entry.lineId,entry); }
-  async saveStockMovements(movements: StockMovement[]): Promise<void> { for(const movement of movements)this.stockMovements.set(movement.id,movement); }
-  async saveReturnDocument(document:ReturnDocument):Promise<void>{this.returnDocuments.set(document.id,document);}
-  async saveAuditEvent(event:AuditEvent):Promise<void>{this.auditLogs.set(event.id,event);}
-  async allocateVoucherNumber(input:{businessId:string;financialYearId:string;voucherType:string;prefix?:string}):Promise<string>{const key=`${input.businessId}:${input.financialYearId}:${input.voucherType}`;const next=this.sequences.get(key)??1;if(!Number.isSafeInteger(next)||next<1)throw new ValidationError("Invalid test sequence.");this.sequences.set(key,next+1);return `${input.prefix??input.voucherType.toUpperCase()}-${String(next).padStart(6,"0")}`;}
+ readonly financialYears=new Map<string,FinancialYear>();readonly accounts=new Map<string,Account>();readonly vouchers=new Map<string,Voucher>();readonly voucherLines=new Map<string,VoucherLine>();readonly ledgerEntries=new Map<string,LedgerEntry>();readonly stockMovements=new Map<string,StockMovement>();readonly partyAllocations=new Map<string,PartyAllocation>();readonly returnDocuments=new Map<string,ReturnDocument>();readonly auditLogs=new Map<string,AuditEvent>();private readonly sequences=new Map<string,number>();
+ async runInTransaction<T>(work:(tx:AccountingTransaction)=>Promise<T>):Promise<T>{return work(this);}
+ async getFinancialYear(id:string){return this.financialYears.get(id)??null;}async getAccount(id:string){return this.accounts.get(id)??null;}async getVoucher(id:string){return this.vouchers.get(id)??null;}
+ async getVoucherLines(voucherId:string){return[...this.voucherLines.values()].filter(v=>v.voucherId===voucherId).sort((a,b)=>a.lineNo-b.lineNo);}
+ async getVouchersByReference(referenceType:string,referenceId:string){return[...this.vouchers.values()].filter(v=>v.referenceType===referenceType&&v.referenceId===referenceId&&v.status==="posted");}
+ async getVoucherByIdempotencyKey(_businessId:string,financialYearId:string,key:string){return[...this.vouchers.values()].find(v=>v.financialYearId===financialYearId&&v.idempotencyKey===key)??null;}
+ async getStockMovementsForSource(sourceId:string){return[...this.stockMovements.values()].filter(m=>m.sourceId===sourceId);}
+ async getStockMovementsForItem(itemId:string,warehouseId?:string,throughDate?:string){return[...this.stockMovements.values()].filter(m=>m.itemId===itemId&&(!warehouseId||m.warehouseId===warehouseId)&&(!throughDate||m.date<=throughDate)).sort((a,b)=>`${a.date}:${a.createdAt}:${a.id}`.localeCompare(`${b.date}:${b.createdAt}:${b.id}`));}
+ async getPartyAllocationsForVoucher(voucherId:string){return[...this.partyAllocations.values()].filter(a=>a.fromVoucherId===voucherId||a.toVoucherId===voucherId);}
+ async saveVoucher(voucher:Voucher){this.vouchers.set(voucher.id,voucher);}async saveVoucherLines(lines:VoucherLine[]){for(const l of lines)this.voucherLines.set(l.lineId,l);}async saveLedgerEntries(entries:LedgerEntry[]){for(const e of entries)this.ledgerEntries.set(e.lineId,e);}async saveStockMovements(movements:StockMovement[]){for(const m of movements)this.stockMovements.set(m.id,m);}
+ async savePartyAllocations(allocations:PartyAllocation[]){for(const a of allocations)this.partyAllocations.set(a.id,a);}async saveReturnDocument(document:ReturnDocument){this.returnDocuments.set(document.id,document);}async saveAuditEvent(event:AuditEvent){this.auditLogs.set(event.id,event);}
+ async allocateVoucherNumber(input:{businessId:string;financialYearId:string;voucherType:string;prefix?:string}){const key=`${input.businessId}:${input.financialYearId}:${input.voucherType}`;const next=this.sequences.get(key)??1;if(!Number.isSafeInteger(next)||next<1)throw new ValidationError("Invalid test sequence.");this.sequences.set(key,next+1);return`${input.prefix??input.voucherType.toUpperCase()}-${String(next).padStart(6,"0")}`;}
 }
-export const testIds=(prefix="id")=>{let n=0;return{next:(p:string)=>`${p}-${prefix}-${++n}`};}; export const fixedClock=(value="2026-08-30T12:00:00.000Z")=>({now:()=>value});
+export const testIds=(prefix="id")=>{let n=0;return{next:(p:string)=>`${p}-${prefix}-${++n}`};};export const fixedClock=(value="2026-08-30T12:00:00.000Z")=>({now:()=>value});
