@@ -1,4 +1,4 @@
-import type { AccountingTransaction, Clock, IdGenerator, LedgerEntry, PostingResult, Voucher, VoucherLine, VoucherLineInput } from "./types";
+import type { AccountingTransaction, AuditEvent, Clock, IdGenerator, LedgerEntry, PostingResult, Voucher, VoucherLine, VoucherLineInput } from "./types";
 import { NotFoundError, PostedVoucherMutationError, ValidationError } from "./errors";
 import { validateVoucherLines } from "./ledger";
 
@@ -8,9 +8,18 @@ export interface CreateVoucherInput {
 }
 export interface VoucherEngineDeps { ids: IdGenerator; clock: Clock }
 
+function assertDateInFinancialYear(date: string, start: string, end: string): void {
+  if (date < start || date > end) throw new ValidationError(`Voucher date ${date} is outside the financial year ${start} to ${end}.`);
+}
+
 export async function postVoucher(tx: AccountingTransaction, input: CreateVoucherInput, deps: VoucherEngineDeps): Promise<PostingResult> {
   if (!input.businessId || !input.financialYearId || !input.voucherType || !input.createdBy) throw new ValidationError("Business, financial year, voucher type and user are required.");
-  if (!input.date) throw new ValidationError("Voucher date is required.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new ValidationError("Voucher date must be YYYY-MM-DD.");
+  const fy = await tx.getFinancialYear(input.financialYearId);
+  if (!fy) throw new NotFoundError("Financial year", input.financialYearId);
+  if (fy.businessId !== input.businessId) throw new ValidationError("Financial year belongs to another business.");
+  if (fy.locked) throw new ValidationError(`Financial year ${fy.name} is locked.`);
+  assertDateInFinancialYear(input.date, fy.startDate, fy.endDate);
   if (!input.lines.length) throw new ValidationError("Voucher requires ledger lines.");
   for (const line of input.lines) {
     const account = await tx.getAccount(line.accountId);
@@ -27,40 +36,27 @@ export async function postVoucher(tx: AccountingTransaction, input: CreateVouche
   const totalCredit = lines.reduce((s, l) => s + l.credit, 0);
   const voucher: Voucher = { id: voucherId, businessId: input.businessId, financialYearId: input.financialYearId, voucherType: input.voucherType, voucherNumber, date: input.date, status: "posted", referenceType: input.referenceType, referenceId: input.referenceId, narration: input.narration, totalDebit, totalCredit, createdBy: input.createdBy, createdAt: now, updatedAt: now };
   const entries: LedgerEntry[] = lines.map(line => ({ ...line, date: input.date, voucherType: input.voucherType, voucherNumber, createdAt: now }));
-  await tx.saveVoucher(voucher);
-  await tx.saveVoucherLines(lines);
-  await tx.saveLedgerEntries(entries);
+  await tx.saveVoucher(voucher); await tx.saveVoucherLines(lines); await tx.saveLedgerEntries(entries);
+  const audit: AuditEvent = { id: deps.ids.next("audit"), businessId: input.businessId, entityType: "voucher", entityId: voucher.id, action: "POST", userId: input.createdBy, timestamp: now, after: { voucherId: voucher.id, voucherNumber: voucher.voucherNumber, voucherType: voucher.voucherType, total: voucher.totalDebit } };
+  await tx.saveAuditEvent(audit);
   return { voucher, lines, ledgerEntries: entries, stockMovements: [] };
 }
 
-/** Reverses a posted voucher and marks the original cancelled in the same repository transaction. */
+/** Reverses a posted voucher. Original data remains immutable; reversal is a new balanced voucher. */
 export async function reverseVoucher(tx: AccountingTransaction, voucherId: string, userId: string, deps: VoucherEngineDeps): Promise<PostingResult> {
   const original = await tx.getVoucher(voucherId);
   if (!original) throw new NotFoundError("Voucher", voucherId);
   if (original.status !== "posted") throw new ValidationError("Only a posted voucher can be reversed.");
+  const fy = await tx.getFinancialYear(original.financialYearId);
+  if (!fy || fy.locked) throw new ValidationError("The original financial year is locked or missing.");
   const originalLines = await tx.getVoucherLines(voucherId);
   if (!originalLines.length) throw new ValidationError("Cannot reverse a voucher without its lines.");
-
-  const lines: VoucherLineInput[] = originalLines.map(line => ({
-    accountId: line.accountId, partyId: line.partyId,
-    description: `Reversal of ${original.voucherNumber}${line.description ? `: ${line.description}` : ""}`,
-    debit: line.credit, credit: line.debit, costCenterId: line.costCenterId,
-    itemId: line.itemId, warehouseId: line.warehouseId, taxCode: line.taxCode,
-  }));
-  const result = await postVoucher(tx, {
-    businessId: original.businessId, financialYearId: original.financialYearId,
-    voucherType: `${original.voucherType}_REVERSAL`, date: deps.clock.now().slice(0, 10),
-    narration: `Reversal of ${original.voucherNumber}`, referenceType: "reversal", referenceId: original.id,
-    createdBy: userId, lines,
-  }, deps);
-
+  const lines: VoucherLineInput[] = originalLines.map(line => ({ accountId: line.accountId, partyId: line.partyId, description: `Reversal of ${original.voucherNumber}${line.description ? `: ${line.description}` : ""}`, debit: line.credit, credit: line.debit, costCenterId: line.costCenterId, itemId: line.itemId, warehouseId: line.warehouseId, taxCode: line.taxCode }));
+  const result = await postVoucher(tx, { businessId: original.businessId, financialYearId: original.financialYearId, voucherType: `${original.voucherType}_REVERSAL`, date: deps.clock.now().slice(0, 10), narration: `Reversal of ${original.voucherNumber}`, referenceType: "reversal", referenceId: original.id, createdBy: userId, lines }, deps);
   result.voucher.reversalOfVoucherId = original.id;
   await tx.saveVoucher(result.voucher);
-  const cancelled: Voucher = { ...original, status: "cancelled", cancelledAt: deps.clock.now(), cancelledBy: userId, updatedAt: deps.clock.now() };
-  await tx.saveVoucher(cancelled);
+  await tx.saveVoucher({ ...original, status: "cancelled", cancelledAt: deps.clock.now(), cancelledBy: userId, updatedAt: deps.clock.now() });
   return result;
 }
 
-export function assertPostedVoucherImmutable(voucher: Voucher): void {
-  if (voucher.status === "posted") throw new PostedVoucherMutationError();
-}
+export function assertPostedVoucherImmutable(voucher: Voucher): void { if (voucher.status === "posted") throw new PostedVoucherMutationError(); }
