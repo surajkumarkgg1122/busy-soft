@@ -1,12 +1,6 @@
 import type { Account, LedgerEntry, Money } from "./types";
 import { ValidationError } from "./errors";
-import { buildBalanceSheet, buildProfitLoss, buildTrialBalance } from "./reports";
-
-export interface ReconciliationResult { trialBalanceDifference: Money; balanceSheetDifference: Money; balanced: boolean; }
-export function reconcile(accounts: readonly Account[], entries: readonly LedgerEntry[]): ReconciliationResult {
-  const tb=buildTrialBalance(accounts,entries); const pl=buildProfitLoss(accounts,entries); const bs=buildBalanceSheet(accounts,entries);
-  const trialBalanceDifference=tb.totalDebit-tb.totalCredit;
-  const balanceSheetDifference=bs.difference;
-  if (!Number.isSafeInteger(trialBalanceDifference) || !Number.isSafeInteger(balanceSheetDifference)) throw new ValidationError("Reconciliation exceeds safe integer range.");
-  return {trialBalanceDifference,balanceSheetDifference,balanced:trialBalanceDifference===0&&balanceSheetDifference===0};
-}
+import { buildBalanceSheet, buildProfitLoss, buildTrialBalance, type ReportPeriod } from "./reports";
+export interface ReconciliationResult{trialBalanceDifference:Money;balanceSheetDifference:Money;profit:Money;balanced:boolean;}
+export function reconcile(accounts:readonly Account[],entries:readonly LedgerEntry[],period:ReportPeriod={}):ReconciliationResult{const tb=buildTrialBalance(accounts,entries,period),pl=buildProfitLoss(accounts,entries,period),bs=buildBalanceSheet(accounts,entries,period);for(const n of [tb.totalDebit,tb.totalCredit,tb.difference,bs.assets,bs.liabilities,bs.equity,pl.income,pl.expense,pl.profit])if(!Number.isSafeInteger(n))throw new ValidationError("Reconciliation exceeds safe integer range.");return{trialBalanceDifference:tb.difference,balanceSheetDifference:bs.difference,profit:pl.profit,balanced:tb.balanced&&bs.balanced};}
+export function assertAccountingIntegrity(accounts:readonly Account[],entries:readonly LedgerEntry[],period:ReportPeriod={}):void{const r=reconcile(accounts,entries,period);if(!r.balanced)throw new ValidationError(`Accounting reconciliation failed: TB difference ${r.trialBalanceDifference}, BS difference ${r.balanceSheetDifference}.`);}
