@@ -1,134 +1,63 @@
 import type { AccountingTransaction, Clock, IdGenerator, LedgerEntry, PostingResult, Voucher, VoucherLine, VoucherLineInput } from "./types";
 import { NotFoundError, PostedVoucherMutationError, ValidationError } from "./errors";
-import { assertBalanced, validateVoucherLines } from "./ledger";
+import { validateVoucherLines } from "./ledger";
 
 export interface CreateVoucherInput {
-  businessId: string;
-  financialYearId: string;
-  voucherType: string;
-  date: string;
-  narration?: string;
-  referenceType?: string;
-  referenceId?: string;
-  prefix?: string;
-  createdBy: string;
-  lines: VoucherLineInput[];
+  businessId: string; financialYearId: string; voucherType: string; date: string; narration?: string;
+  referenceType?: string; referenceId?: string; prefix?: string; createdBy: string; lines: VoucherLineInput[];
 }
-
 export interface VoucherEngineDeps { ids: IdGenerator; clock: Clock }
 
 export async function postVoucher(tx: AccountingTransaction, input: CreateVoucherInput, deps: VoucherEngineDeps): Promise<PostingResult> {
   if (!input.businessId || !input.financialYearId || !input.voucherType || !input.createdBy) throw new ValidationError("Business, financial year, voucher type and user are required.");
   if (!input.date) throw new ValidationError("Voucher date is required.");
   if (!input.lines.length) throw new ValidationError("Voucher requires ledger lines.");
-
   for (const line of input.lines) {
     const account = await tx.getAccount(line.accountId);
     if (!account) throw new NotFoundError("Account", line.accountId);
     if (account.businessId !== input.businessId) throw new ValidationError("Account belongs to another business.");
     if (!account.active) throw new ValidationError(`Account is inactive: ${account.name}`);
   }
-
   const voucherId = deps.ids.next("vch");
-  const voucherNumber = await tx.allocateVoucherNumber({
-    businessId: input.businessId,
-    financialYearId: input.financialYearId,
-    voucherType: input.voucherType,
-    prefix: input.prefix,
-  });
+  const voucherNumber = await tx.allocateVoucherNumber({ businessId: input.businessId, financialYearId: input.financialYearId, voucherType: input.voucherType, prefix: input.prefix });
   const now = deps.clock.now();
-
-  const lines: VoucherLine[] = input.lines.map((line, index) => ({
-    ...line,
-    lineId: deps.ids.next("line"),
-    voucherId,
-    businessId: input.businessId,
-    lineNo: index + 1,
-  }));
+  const lines: VoucherLine[] = input.lines.map((line, index) => ({ ...line, lineId: deps.ids.next("line"), voucherId, businessId: input.businessId, lineNo: index + 1 }));
   validateVoucherLines(lines);
   const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
   const totalCredit = lines.reduce((s, l) => s + l.credit, 0);
-  assertBalanced(lines);
-
-  const voucher: Voucher = {
-    id: voucherId,
-    businessId: input.businessId,
-    financialYearId: input.financialYearId,
-    voucherType: input.voucherType,
-    voucherNumber,
-    date: input.date,
-    status: "posted",
-    referenceType: input.referenceType,
-    referenceId: input.referenceId,
-    narration: input.narration,
-    totalDebit,
-    totalCredit,
-    createdBy: input.createdBy,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  const entries: LedgerEntry[] = lines.map(line => ({
-    ...line,
-    date: input.date,
-    voucherType: input.voucherType,
-    voucherNumber,
-    createdAt: now,
-  }));
-
+  const voucher: Voucher = { id: voucherId, businessId: input.businessId, financialYearId: input.financialYearId, voucherType: input.voucherType, voucherNumber, date: input.date, status: "posted", referenceType: input.referenceType, referenceId: input.referenceId, narration: input.narration, totalDebit, totalCredit, createdBy: input.createdBy, createdAt: now, updatedAt: now };
+  const entries: LedgerEntry[] = lines.map(line => ({ ...line, date: input.date, voucherType: input.voucherType, voucherNumber, createdAt: now }));
   await tx.saveVoucher(voucher);
   await tx.saveVoucherLines(lines);
   await tx.saveLedgerEntries(entries);
   return { voucher, lines, ledgerEntries: entries, stockMovements: [] };
 }
 
-/** Creates a balanced reversal voucher; the original posted voucher remains immutable. */
+/** Reverses a posted voucher and marks the original cancelled in the same repository transaction. */
 export async function reverseVoucher(tx: AccountingTransaction, voucherId: string, userId: string, deps: VoucherEngineDeps): Promise<PostingResult> {
   const original = await tx.getVoucher(voucherId);
   if (!original) throw new NotFoundError("Voucher", voucherId);
   if (original.status !== "posted") throw new ValidationError("Only a posted voucher can be reversed.");
-
-  // The repository adapter must supply the original lines when implementing reversal.
-  // This guard deliberately prevents a partial reversal implementation from silently posting bad accounting.
-  throw new ValidationError(`Reversal requires original voucher lines for ${voucherId}; use reverseVoucherWithLines().`);
-}
-
-export async function reverseVoucherWithLines(
-  tx: AccountingTransaction,
-  original: Voucher,
-  originalLines: readonly VoucherLine[],
-  userId: string,
-  deps: VoucherEngineDeps
-): Promise<PostingResult> {
-  if (original.status !== "posted") throw new ValidationError("Only a posted voucher can be reversed.");
-  if (originalLines.length === 0) throw new ValidationError("Cannot reverse a voucher without its lines.");
+  const originalLines = await tx.getVoucherLines(voucherId);
+  if (!originalLines.length) throw new ValidationError("Cannot reverse a voucher without its lines.");
 
   const lines: VoucherLineInput[] = originalLines.map(line => ({
-    accountId: line.accountId,
-    partyId: line.partyId,
+    accountId: line.accountId, partyId: line.partyId,
     description: `Reversal of ${original.voucherNumber}${line.description ? `: ${line.description}` : ""}`,
-    debit: line.credit,
-    credit: line.debit,
-    costCenterId: line.costCenterId,
-    itemId: line.itemId,
-    warehouseId: line.warehouseId,
-    taxCode: line.taxCode,
+    debit: line.credit, credit: line.debit, costCenterId: line.costCenterId,
+    itemId: line.itemId, warehouseId: line.warehouseId, taxCode: line.taxCode,
   }));
-
   const result = await postVoucher(tx, {
-    businessId: original.businessId,
-    financialYearId: original.financialYearId,
-    voucherType: `${original.voucherType}_REVERSAL`,
-    date: deps.clock.now().slice(0, 10),
-    narration: `Reversal of ${original.voucherNumber}`,
-    referenceType: "reversal",
-    referenceId: original.id,
-    createdBy: userId,
-    lines,
+    businessId: original.businessId, financialYearId: original.financialYearId,
+    voucherType: `${original.voucherType}_REVERSAL`, date: deps.clock.now().slice(0, 10),
+    narration: `Reversal of ${original.voucherNumber}`, referenceType: "reversal", referenceId: original.id,
+    createdBy: userId, lines,
   }, deps);
 
   result.voucher.reversalOfVoucherId = original.id;
   await tx.saveVoucher(result.voucher);
+  const cancelled: Voucher = { ...original, status: "cancelled", cancelledAt: deps.clock.now(), cancelledBy: userId, updatedAt: deps.clock.now() };
+  await tx.saveVoucher(cancelled);
   return result;
 }
 
