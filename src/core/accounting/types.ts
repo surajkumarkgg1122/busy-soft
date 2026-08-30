@@ -6,7 +6,7 @@ export interface FinancialYear { id: string; businessId: string; name: string; s
 export interface Account { id: string; businessId: string; code: string; name: string; type: AccountType; parentId?: string | null; systemAccount: boolean; active: boolean; openingDebit: Money; openingCredit: Money; createdAt: string; updatedAt: string; }
 export interface VoucherLineInput { accountId: string; partyId?: string; description?: string; debit: Money; credit: Money; costCenterId?: string; itemId?: string; warehouseId?: string; taxCode?: string; }
 export interface VoucherLine extends VoucherLineInput { lineId: string; voucherId: string; businessId: string; lineNo: number; }
-export interface Voucher { id: string; businessId: string; financialYearId: string; voucherType: string; voucherNumber: string; date: string; status: VoucherStatus; referenceType?: string; referenceId?: string; narration?: string; totalDebit: Money; totalCredit: Money; createdBy: string; createdAt: string; updatedAt: string; cancelledAt?: string; cancelledBy?: string; reversalOfVoucherId?: string; }
+export interface Voucher { id: string; businessId: string; financialYearId: string; voucherType: string; voucherNumber: string; date: string; status: VoucherStatus; referenceType?: string; referenceId?: string; narration?: string; totalDebit: Money; totalCredit: Money; createdBy: string; createdAt: string; updatedAt: string; cancelledAt?: string; cancelledBy?: string; reversalOfVoucherId?: string; idempotencyKey?: string; }
 export interface LedgerEntry extends VoucherLine { date: string; voucherType: string; voucherNumber: string; createdAt: string; }
 export type StockDirection = "in" | "out";
 export type StockSourceType = "opening" | "purchase" | "purchase_return" | "sale" | "sale_return" | "adjustment" | "transfer";
@@ -14,6 +14,7 @@ export interface StockMovement { id: string; businessId: string; financialYearId
 export interface TaxBreakdown { taxableValue: Money; cgst: Money; sgst: Money; igst: Money; cess: Money; totalTax: Money; total: Money; }
 export interface TaxInput { taxableValue: Money; rate: number; intraState: boolean; cessRate?: number; }
 export interface PartyBalance { partyId: string; debit: Money; credit: Money; net: Money; side: "debit" | "credit" | "zero"; }
+export interface PartyAllocation { id: string; businessId: string; partyId: string; fromVoucherId: string; toVoucherId: string; amount: Money; date: string; createdBy: string; createdAt: string; }
 export interface AuditEvent { id: string; businessId: string; entityType: string; entityId: string; action: string; userId: string; timestamp: string; before?: Record<string, unknown>; after?: Record<string, unknown>; metadata?: Record<string, unknown>; }
 export interface ReturnDocument { id: string; businessId: string; financialYearId: string; type: "SALE_RETURN" | "PURCHASE_RETURN"; voucherId: string; originalVoucherId: string; partyId: string; date: string; createdBy: string; items: Array<{ itemId: string; quantity: number; unitCost: Money; warehouseId?: string }>; taxableValue: Money; taxTotal: Money; createdAt: string; }
 export interface PostingResult { voucher: Voucher; lines: VoucherLine[]; ledgerEntries: LedgerEntry[]; stockMovements: StockMovement[]; }
@@ -26,11 +27,15 @@ export interface AccountingTransaction {
   getVoucher(voucherId: string): Promise<Voucher | null>;
   getVoucherLines(voucherId: string): Promise<VoucherLine[]>;
   getVouchersByReference(referenceType: string, referenceId: string): Promise<Voucher[]>;
+  getVoucherByIdempotencyKey(businessId: string, financialYearId: string, idempotencyKey: string): Promise<Voucher | null>;
   getStockMovementsForSource(sourceId: string): Promise<StockMovement[]>;
+  getStockMovementsForItem(itemId: string, warehouseId?: string, throughDate?: string): Promise<StockMovement[]>;
+  getPartyAllocationsForVoucher(voucherId: string): Promise<PartyAllocation[]>;
   saveVoucher(voucher: Voucher): Promise<void>;
   saveVoucherLines(lines: VoucherLine[]): Promise<void>;
   saveLedgerEntries(entries: LedgerEntry[]): Promise<void>;
   saveStockMovements(movements: StockMovement[]): Promise<void>;
+  savePartyAllocations(allocations: PartyAllocation[]): Promise<void>;
   saveReturnDocument(document: ReturnDocument): Promise<void>;
   saveAuditEvent(event: AuditEvent): Promise<void>;
   allocateVoucherNumber(input: { businessId: string; financialYearId: string; voucherType: string; prefix?: string }): Promise<string>;
