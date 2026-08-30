@@ -3,7 +3,6 @@ import type { AccountingPermission } from "@/core/accounting/authorization";
 import { assertAuthorized, assertTrustedPostingBoundary } from "@/core/accounting/authorization";
 import { postSaleEntry } from "@/core/accounting/saleEntry";
 import { ValidationError } from "@/core/accounting/errors";
-import { firebaseAuth } from "@/lib/firebase";
 
 export interface SalesApplicationDeps { repo: AccountingRepository; ids:{next(prefix:string):string}; clock:{now():string}; }
 export interface CreateSaleContext { businessId:string; userId:string; financialYearId:string; idempotencyKey:string; permissions:AccountingPermission[]; role?:string; }
@@ -11,6 +10,7 @@ export interface CreateSaleItem { itemId:string; quantity:number; warehouseId?:s
 export interface CreateSaleInput { date:string; customerId?:string; paymentMode:"cash"|"bank"|"credit"; grossValue:Money; discountPercent?:number; discountAmount?:Money; paidAmount?:Money; bankAccountId?:string; taxRate:number; intraState:boolean; cessRate?:number; accountMap:Record<string,string|undefined>; itemMovements:CreateSaleItem[]; narration?:string; documentId?:string; documentPayload?:Record<string,unknown>; }
 
 async function createSaleFromBrowser(ctx:CreateSaleContext,input:CreateSaleInput):Promise<PostingResult>{
+  const { firebaseAuth }=await import("@/lib/firebase");
   if(!firebaseAuth?.currentUser)throw new ValidationError("You must be signed in to post a sale.");
   const token=await firebaseAuth.currentUser.getIdToken();
   const response=await fetch("/api/accounting/sales",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},body:JSON.stringify({...input,businessId:ctx.businessId,idempotencyKey:ctx.idempotencyKey})});
