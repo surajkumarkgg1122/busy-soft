@@ -2,7 +2,7 @@ import "server-only";
 import { collection, doc, type Firestore, type Transaction } from "firebase-admin/firestore";
 import type { AccountingRepository, AccountingTransaction, Account, AtomicAccountingDocument, AuditEvent, FinancialYear, LedgerEntry, PartyAllocation, ReturnDocument, StockMovement, Voucher, VoucherLine } from "@/core/accounting/types";
 import { ValidationError } from "@/core/accounting/errors";
-import { adminDb } from "./admin";
+import { getAdminServices } from "./admin";
 
 const id=(value:string,name:string)=>{if(!value||typeof value!=="string")throw new ValidationError(`${name} is required.`);return value;};
 const ref=(db:Firestore,businessId:string,name:string,key:string)=>doc(db,"businesses",id(businessId,"Business ID"),id(name,"Collection"),id(key,`Document ID for ${name}`));
@@ -36,5 +36,6 @@ class AdminAccountingTransaction implements AccountingTransaction {
 
 export function createAdminAccountingRepository(businessId:string):AccountingRepository {
   id(businessId,"Business ID");
-  return { runInTransaction:<T>(work:(tx:AccountingTransaction)=>Promise<T>)=>adminDb.runTransaction(raw=>work(new AdminAccountingTransaction(adminDb,raw,businessId))) };
+  const {db}=getAdminServices();
+  return { runInTransaction:<T>(work:(tx:AccountingTransaction)=>Promise<T>)=>db.runTransaction(raw=>work(new AdminAccountingTransaction(db,raw,businessId))) };
 }
