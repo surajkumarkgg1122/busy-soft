@@ -4,7 +4,7 @@ import { createAdminAccountingRepository } from "@/infrastructure/firebase/admin
 import { postPayment, postReceipt } from "@/core/accounting/transactions";
 import { ValidationError } from "@/core/accounting/errors";
 
-aexport const runtime = "nodejs";
+export const runtime = "nodejs";
 
 type Membership = { status?: string; role?: string; permissions?: Record<string, unknown> };
 type AdminDb = ReturnType<typeof getAdminServices>["db"];
@@ -39,13 +39,11 @@ export async function POST(request:Request){
   try{
     const body=await request.json() as Record<string,unknown>;const businessId=String(body.businessId??"");const date=String(body.date??"");const customerId=String(body.customerId??"");const direction=String(body.direction??"") as "in"|"out";const amountMinor=Number(body.amountMinor??0);const paymentMethod=String(body.method??"Cash");const bankAccountId=typeof body.bankAccountId==="string"&&body.bankAccountId?body.bankAccountId:undefined;const note=typeof body.note==="string"?body.note.trim():"";const idempotencyKey=String(body.idempotencyKey??"");
     const {db,userId}=await authorize(request,businessId,"create");
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new ValidationError("Payment date must be YYYY-MM-DD.");if(!customerId)throw new ValidationError("Customer is required.");if(!["in","out"].includes(direction))throw new ValidationError("Invalid payment direction.");
-    if(!Number.isSafeInteger(amountMinor)||amountMinor<=0)throw new ValidationError("Payment amount must be a positive integer minor-unit amount.");if(!idempotencyKey)throw new ValidationError("Idempotency key is required.");
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new ValidationError("Payment date must be YYYY-MM-DD.");if(!customerId)throw new ValidationError("Customer is required.");if(!["in","out"].includes(direction))throw new ValidationError("Invalid payment direction.");if(!Number.isSafeInteger(amountMinor)||amountMinor<=0)throw new ValidationError("Payment amount must be a positive integer minor-unit amount.");if(!idempotencyKey)throw new ValidationError("Idempotency key is required.");
     const fyId=financialYearId(date);const businessRef=db.collection("businesses").doc(businessId);const customerSnap=await businessRef.collection("customers").doc(customerId).get();if(!customerSnap.exists)throw new ValidationError("Customer does not exist.");
     const fySnap=await businessRef.collection("financialYears").doc(fyId).get();if(!fySnap.exists)throw new ValidationError(`Financial year ${fyId} does not exist. Configure the financial year before posting payments.`);
     const bankAccount=bankAccountId??DEFAULT_BANK_ACCOUNT;const cashName=await normalizeAccountName(db,businessId,DEFAULT_CASH_ACCOUNT);let bankName="";if(paymentMethod.toLowerCase()!=="cash")bankName=await normalizeAccountName(db,businessId,bankAccount);
-    const repo=createAdminAccountingRepository(businessId);const deps={ids:{next:(prefix:string)=>`${prefix}-${crypto.randomUUID()}`},clock:{now:()=>new Date().toISOString()}};const accountMap={party:DEFAULT_PARTY_ACCOUNT,cash:DEFAULT_CASH_ACCOUNT,bank:bankAccount};
-    const narration=[paymentMethod,note].filter(Boolean).join(" · ");
+    const repo=createAdminAccountingRepository(businessId);const deps={ids:{next:(prefix:string)=>`${prefix}-${crypto.randomUUID()}`},clock:{now:()=>new Date().toISOString()}};const accountMap={party:DEFAULT_PARTY_ACCOUNT,cash:DEFAULT_CASH_ACCOUNT,bank:bankAccount};const narration=[paymentMethod,note].filter(Boolean).join(" · ");
     const result=direction==="in"?await postReceipt(repo,{businessId,financialYearId:fyId,date,userId,partyId:customerId,amount:amountMinor,mode:paymentMethod.toLowerCase()==="cash"?"cash":"bank",accountMap,idempotencyKey,narration:narration||undefined},deps):await postPayment(repo,{businessId,financialYearId:fyId,date,userId,partyId:customerId,amount:amountMinor,mode:paymentMethod.toLowerCase()==="cash"?"cash":"bank",accountId:DEFAULT_PARTY_ACCOUNT,accountMap,idempotencyKey,narration:narration||undefined},deps);
     return NextResponse.json({success:true,result:{voucher:result.voucher,customer:{id:customerId,name:String(customerSnap.data()?.name??"")},accountName:paymentMethod.toLowerCase()==="cash"?cashName:bankName}});
   }catch(error){const message=error instanceof Error?error.message:"Could not post payment.";const status=/AUTH|required.*business|date|amount|customer|account|financial year/i.test(message)?400:/permission|member/i.test(message)?403:/duplicate|idempotency/i.test(message)?409:500;return jsonError(message,status);}
