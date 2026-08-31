@@ -1,6 +1,5 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getAuth, browserLocalPersistence, setPersistence } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -20,8 +19,13 @@ const firebaseApp = firebaseConfigured
   : null;
 
 export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
-export const firestoreDb = firebaseApp ? getFirestore(firebaseApp) : null;
 
-// Stable aliases used by the multi-tenant TypeScript modules.
+// Client Firebase is intentionally Auth-only. All Firestore/accounting writes
+// must go through the trusted server/Admin SDK boundary.
 export const auth = firebaseAuth;
-export const db = firestoreDb;
+
+if (firebaseAuth) {
+  void setPersistence(firebaseAuth, browserLocalPersistence).catch(() => {
+    // Persistence can be unavailable in restricted browser environments.
+  });
+}
