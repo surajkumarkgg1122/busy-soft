@@ -16,10 +16,7 @@ export interface BusinessAddress { line1: string; line2?: string; city: string; 
 export interface BusinessGSTSettings { enabled: boolean; gstin?: string; registrationType?: "regular" | "composition" | "unregistered" | "other"; }
 export interface BusinessFinancialYear { startMonth: number; startDay: number; }
 export interface BusinessTrial { status: TrialStatus; planId: "trial"; startsAt: Timestamp; expiresAt: Timestamp; }
-export interface Business { businessId: string; name: string; legalName?: string; businessType?: string; phone?: string; email?: string; address: BusinessAddress; gst: BusinessGSTSettings; financialYear: BusinessFinancialYear; currency: string; timezone: string; ownerId: string; licenseId?: string; trial: BusinessTrial; status: BusinessStatus; createdAt: Timestamp; updatedAt: Timestamp; }
-
-/** @deprecated Use GranularPermissions for new features. Kept for backwards compatibility. */
-export interface MemberPermissions { sales: boolean; purchases: boolean; inventory: boolean; payments: boolean; expenses: boolean; reports: boolean; settings: boolean; }
-export interface BusinessMember { uid: string; role: BusinessMemberRole; status: BusinessMemberStatus; permissions: MemberPermissions & GranularPermissions; joinedAt: Timestamp; invitedBy?: string; invitationId?: string; }
+export interface Business { businessId: string; name: string; legalName?: string; businessType?: string; phone?: string; email?: string; address: BusinessAddress; gst: BusinessGSTSettings; financialYear: BusinessFinancialYear; currency: string; timezone: string; ownerId: string; licenseId?: string; trial: BusinessTrial; status: BusinessStatus; createdAt: Timestamp; updatedAt: Timestamp; setupStatus?: "pending" | "ready" | "failed"; accountingVersion?: number; }
+export interface BusinessMember { uid: string; role: BusinessMemberRole; status: BusinessMemberStatus; permissions: GranularPermissions; joinedAt: Timestamp; invitedBy?: string; invitationId?: string; }
 export interface UserBusinessMembership extends BusinessMember { businessId: string; }
-export interface BusinessInvitation { invitationId: string; businessId: string; invitedEmail: string; role: BusinessMemberRole; permissions: MemberPermissions & GranularPermissions; status: BusinessInvitationStatus; invitedBy: string; createdAt: Timestamp; expiresAt: Timestamp; respondedAt?: Timestamp; }
+export interface BusinessInvitation { invitationId: string; businessId: string; invitedEmail: string; role: BusinessMemberRole; permissions: GranularPermissions; status: BusinessInvitationStatus; invitedBy: string; createdAt: Timestamp; expiresAt: Timestamp; respondedAt?: Timestamp; }
