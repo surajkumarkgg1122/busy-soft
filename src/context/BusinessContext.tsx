@@ -3,11 +3,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { firebaseAuth } from "../lib/firebase";
-import type { AppUser, Business, BusinessMember, UserBusinessMembership, MemberPermissions, PermissionModule, PermissionAction, GranularPermissions } from "../types";
+import type { Business, BusinessMember, MemberPermissions, PermissionModule, PermissionAction, GranularPermissions } from "../types";
 
 interface BusinessMembership extends BusinessMember { business: Business; }
 export type PermissionKey = keyof MemberPermissions;
-export interface PermissionCheck { module: PermissionModule; action?: PermissionAction; }
 
 interface BusinessContextValue {
   user: User | null; memberships: BusinessMembership[]; activeBusiness: BusinessMembership | null; activeBusinessId: string | null; loading: boolean;
@@ -18,7 +17,11 @@ interface BusinessContextValue {
   canManageUsers: boolean; canManageSettings: boolean;
 }
 
-export interface CreateBusinessInput { name: string; legalName?: string; businessType?: string; phone?: string; email?: string; state?: string; district?: string; city?: string; pincode?: string; gstin?: string; gstEnabled?: boolean; }
+export interface CreateBusinessInput {
+  name: string; legalName?: string; businessType?: string; phone?: string; email?: string; address?: string; state?: string; district?: string; city?: string; pincode?: string;
+  gstin?: string; gstEnabled?: boolean; registrationType?: "regular" | "composition" | "unregistered" | "other"; idempotencyKey?: string;
+}
+
 const BusinessContext = createContext<BusinessContextValue | undefined>(undefined);
 const ACTIVE_BUSINESS_KEY = "erp.activeBusinessId";
 
@@ -62,7 +65,8 @@ const BusinessProvider = ({children}:{children:ReactNode}) => {
   const selectBusiness=useCallback((businessId:string)=>{if(!memberships.some(i=>i.business.businessId===businessId))return;setActiveBusinessId(businessId);window.localStorage.setItem(ACTIVE_BUSINESS_KEY,businessId);},[memberships]);
 
   const createBusiness=useCallback(async(input:CreateBusinessInput)=>{
-    const payload=await workspaceRequest("/api/workspace",{method:"POST",body:JSON.stringify({input})});
+    const idempotencyKey=input.idempotencyKey?.trim()||`business-create-${crypto.randomUUID()}`;
+    const payload=await workspaceRequest("/api/workspace",{method:"POST",body:JSON.stringify({input,idempotencyKey})});
     await refreshBusinesses(); selectBusiness(String(payload.businessId)); return String(payload.businessId);
   },[refreshBusinesses,selectBusiness]);
 
