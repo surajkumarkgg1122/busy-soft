@@ -9,7 +9,7 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,7 +22,11 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
-      - name: Accounting invariants
+      - name: Accounting regression suite
+        run: npm test -- --run
+      - name: Accounting invariant smoke test
         run: npx --yes tsx@4.20.3 scripts/accounting-smoke.ts
+      - name: TypeScript
+        run: npx tsc --noEmit
       - name: Production build
         run: npm run build
