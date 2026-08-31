@@ -1,5 +1,6 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { getAuth, browserLocalPersistence, setPersistence } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -19,10 +20,13 @@ const firebaseApp = firebaseConfigured
   : null;
 
 export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
-
-// Client Firebase is intentionally Auth-only. All Firestore/accounting writes
-// must go through the trusted server/Admin SDK boundary.
 export const auth = firebaseAuth;
+
+// Temporary compatibility export: existing UI modules still use the client
+// Firestore SDK. Accounting writes must continue to use the Admin SDK/API.
+// This will be removed only after every remaining client Firestore consumer
+// has been migrated to a server/API data path.
+export const firestoreDb = firebaseApp ? getFirestore(firebaseApp) : null;
 
 if (firebaseAuth) {
   void setPersistence(firebaseAuth, browserLocalPersistence).catch(() => {
