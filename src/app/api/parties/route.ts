@@ -9,9 +9,7 @@ import type { AccountingPermission } from "@/core/accounting/authorization";
 
 export const runtime = "nodejs";
 
-function error(message: string, status = 400) {
-  return NextResponse.json({ success: false, error: message }, { status });
-}
+function error(message: string, status = 400) { return NextResponse.json({ success: false, error: message }, { status }); }
 
 async function authenticate(request: Request) {
   const { auth, db } = getAdminServices();
@@ -23,12 +21,11 @@ async function authenticate(request: Request) {
 
 function permissionsFor(member: BusinessMember): AccountingPermission[] {
   const base: AccountingPermission[] = [];
-  if (member.role === "owner" || member.role === "admin") {
-    return ["PARTY_CREATE", "PARTY_EDIT", "PARTY_ARCHIVE"];
-  }
+  if (member.role === "owner" || member.role === "admin") return ["PARTY_CREATE", "PARTY_EDIT", "PARTY_ARCHIVE", "PARTY_VIEW"];
   if (member.permissions?.parties?.create) base.push("PARTY_CREATE");
   if (member.permissions?.parties?.edit) base.push("PARTY_EDIT");
   if (member.permissions?.parties?.delete) base.push("PARTY_ARCHIVE");
+  if (member.permissions?.parties?.view) base.push("PARTY_VIEW");
   return base;
 }
 
@@ -42,25 +39,14 @@ async function requireMembership(db: Firestore, businessId: string, uid: string)
 
 async function currentFinancialYear(db: Firestore, businessId: string): Promise<string> {
   const snapshot = await db.collection("businesses").doc(businessId).collection("financialYears").where("locked", "==", false).get();
-  const active = snapshot.docs
-    .map((doc) => ({ id: doc.id, startDate: String(doc.data()?.startDate || "") }))
-    .sort((a, b) => b.startDate.localeCompare(a.startDate));
+  const active = snapshot.docs.map((doc) => ({ id: doc.id, startDate: String(doc.data()?.startDate || "") })).sort((a, b) => b.startDate.localeCompare(a.startDate));
   if (!active.length) throw new Error("No active financial year is configured for this business.");
   return active[0].id;
 }
 
-function ledgerAccountFor(kind: PartyKind) {
-  return kind === "customer" ? "acct-debtors" : "acct-creditors";
-}
-
-function generatedPartyCode(kind: PartyKind) {
-  const prefix = kind === "customer" ? "CUS" : "SUP";
-  return `${prefix}-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
-}
-
-function publicParty(data: Record<string, unknown>, id: string): PartyMaster {
-  return { id, ...(data as Omit<PartyMaster, "id">) };
-}
+function ledgerAccountFor(kind: PartyKind) { return kind === "customer" ? "acct-debtors" : "acct-creditors"; }
+function generatedPartyCode(kind: PartyKind) { return `${kind === "customer" ? "CUS" : "SUP"}-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`; }
+function publicParty(data: Record<string, unknown>, id: string): PartyMaster { return { id, ...(data as Omit<PartyMaster, "id">) }; }
 
 export async function GET(request: Request) {
   try {
@@ -68,14 +54,31 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const businessId = String(url.searchParams.get("businessId") || "").trim();
     const kind = String(url.searchParams.get("kind") || "customer") as PartyKind;
+    const partyId = String(url.searchParams.get("partyId") || "").trim();
     if (!businessId) return error("Business ID is required.");
     if (kind !== "customer" && kind !== "supplier") return error("Party kind must be customer or supplier.");
-    await requireMembership(db, businessId, token.uid);
-    const snapshot = await db.collection("businesses").doc(businessId).collection("parties").where("kind", "==", kind).get();
-    const parties = snapshot.docs
-      .map((doc) => publicParty(doc.data() as Record<string, unknown>, doc.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    return NextResponse.json({ success: true, parties });
+    const member = await requireMembership(db, businessId, token.uid);
+    if (!permissionsFor(member).includes("PARTY_VIEW")) return error("Permission denied: PARTY_VIEW.", 403);
+
+    if (!partyId) {
+      const snapshot = await db.collection("businesses").doc(businessId).collection("parties").where("kind", "==", kind).get();
+      const parties = snapshot.docs.map((doc) => publicParty(doc.data() as Record<string, unknown>, doc.id)).sort((a, b) => a.name.localeCompare(b.name));
+      return NextResponse.json({ success: true, parties });
+    }
+
+    const partySnap = await db.collection("businesses").doc(businessId).collection("parties").doc(partyId).get();
+    if (!partySnap.exists) return error("Party not found.", 404);
+    const party = publicParty(partySnap.data() as Record<string, unknown>, partySnap.id);
+    if (party.kind !== kind || party.businessId !== businessId) return error("Party business or type mismatch.", 400);
+
+    const ledgerSnap = await db.collection("businesses").doc(businessId).collection("ledgerEntries").where("partyId", "==", partyId).get();
+    const ledger = ledgerSnap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as Record<string, unknown>) })).sort((a, b) => `${String(b.date || "")}:${String(b.createdAt || "")}`.localeCompare(`${String(a.date || "")}:${String(a.createdAt || "")}`));
+    const totalDebit = ledger.reduce((sum, line) => sum + Number(line.debit || 0), 0);
+    const totalCredit = ledger.reduce((sum, line) => sum + Number(line.credit || 0), 0);
+    const net = totalDebit - totalCredit;
+    const outstanding = kind === "customer" ? Math.max(net, 0) : Math.max(-net, 0);
+    const side = net > 0 ? "debit" : net < 0 ? "credit" : "zero";
+    return NextResponse.json({ success: true, party, ledger, balance: { debit: totalDebit, credit: totalCredit, net, side, outstanding } });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not load parties.";
     const status = (err as { statusCode?: number }).statusCode ?? (/authentication|token|credential/i.test(message) ? 401 : 400);
@@ -102,12 +105,7 @@ export async function POST(request: Request) {
     input.ledgerAccountId = String(input.ledgerAccountId || ledgerAccountFor(kind));
     input.businessId = businessId;
     const repo = createAdminAccountingRepository(businessId);
-    const result = await createParty(
-      { repo, ids: { next: (prefix) => `${prefix}-${crypto.randomUUID()}` }, clock: { now: () => new Date().toISOString() } },
-      { businessId, userId: token.uid, financialYearId, idempotencyKey, permissions },
-      input,
-      kind,
-    );
+    const result = await createParty({ repo, ids: { next: (prefix) => `${prefix}-${crypto.randomUUID()}` }, clock: { now: () => new Date().toISOString() } }, { businessId, userId: token.uid, financialYearId, idempotencyKey, permissions }, input, kind);
     return NextResponse.json({ success: true, party: result });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not create party.";
@@ -132,12 +130,7 @@ export async function PATCH(request: Request) {
     const input = { ...((body.input || {}) as Record<string, unknown>) } as Partial<PartyMaster>;
     input.businessId = businessId;
     const repo = createAdminAccountingRepository(businessId);
-    const result = await updateParty(
-      { repo, ids: { next: (prefix) => `${prefix}-${crypto.randomUUID()}` }, clock: { now: () => new Date().toISOString() } },
-      { businessId, userId: token.uid, financialYearId, idempotencyKey: idempotencyKey.length >= 16 ? idempotencyKey : `party-edit-${crypto.randomUUID()}`, permissions },
-      input,
-      kind,
-    );
+    const result = await updateParty({ repo, ids: { next: (prefix) => `${prefix}-${crypto.randomUUID()}` }, clock: { now: () => new Date().toISOString() } }, { businessId, userId: token.uid, financialYearId, idempotencyKey: idempotencyKey.length >= 16 ? idempotencyKey : `party-edit-${crypto.randomUUID()}`, permissions }, input, kind);
     return NextResponse.json({ success: true, party: result });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not update party.";
