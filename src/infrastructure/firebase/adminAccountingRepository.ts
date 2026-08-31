@@ -1,12 +1,12 @@
 import "server-only";
-import { collection, doc, type Firestore, type Transaction } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
 import type { AccountingRepository, AccountingTransaction, Account, AtomicAccountingDocument, AuditEvent, FinancialYear, LedgerEntry, PartyAllocation, ReturnDocument, StockMovement, Voucher, VoucherLine } from "@/core/accounting/types";
 import { ValidationError } from "@/core/accounting/errors";
 import { getAdminServices } from "./admin";
 
 const id=(value:string,name:string)=>{if(!value||typeof value!=="string")throw new ValidationError(`${name} is required.`);return value;};
-const ref=(db:Firestore,businessId:string,name:string,key:string)=>doc(db,"businesses",id(businessId,"Business ID"),id(name,"Collection"),id(key,`Document ID for ${name}`));
-const col=(db:Firestore,businessId:string,name:string)=>collection(db,"businesses",id(businessId,"Business ID"),id(name,"Collection"));
+const ref=(db:Firestore,businessId:string,name:string,key:string)=>db.collection("businesses").doc(id(businessId,"Business ID")).collection(id(name,"Collection")).doc(id(key,`Document ID for ${name}`));
+const col=(db:Firestore,businessId:string,name:string)=>db.collection("businesses").doc(id(businessId,"Business ID")).collection(id(name,"Collection"));
 const toAccount=(data:Record<string,unknown>,accountId:string):Account=>({id:accountId,businessId:String(data.businessId??""),code:String(data.code??""),name:String(data.name??""),type:data.type as Account["type"],parentId:(data.parentId as string|null|undefined)??null,systemAccount:Boolean(data.systemAccount),active:data.active!==false,openingDebit:Number(data.openingDebit??0),openingCredit:Number(data.openingCredit??0),createdAt:String(data.createdAt??""),updatedAt:String(data.updatedAt??"")});
 
 class AdminAccountingTransaction implements AccountingTransaction {
