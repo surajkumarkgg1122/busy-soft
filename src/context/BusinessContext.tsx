@@ -67,13 +67,17 @@ const BusinessProvider = ({children}:{children:ReactNode}) => {
   const createBusiness=useCallback(async(input:CreateBusinessInput)=>{
     const idempotencyKey=input.idempotencyKey?.trim()||`business-create-${crypto.randomUUID()}`;
     const payload=await workspaceRequest("/api/workspace",{method:"POST",body:JSON.stringify({input,idempotencyKey})});
-    await refreshBusinesses(); selectBusiness(String(payload.businessId)); return String(payload.businessId);
-  },[refreshBusinesses,selectBusiness]);
+    const businessId=String(payload.businessId);
+    await refreshBusinesses();
+    setActiveBusinessId(businessId);
+    window.localStorage.setItem(ACTIVE_BUSINESS_KEY,businessId);
+    return businessId;
+  },[refreshBusinesses]);
 
   const activeBusiness=useMemo(()=>memberships.find(i=>i.business.businessId===activeBusinessId)??null,[memberships,activeBusinessId]);
   const hasPermission=useCallback((permission:PermissionKey)=>activeBusiness?.role==="owner"||activeBusiness?.role==="admin"||activeBusiness?.permissions?.[permission]===true,[activeBusiness]);
   const can=useCallback((module:PermissionModule,action:PermissionAction="view")=>{if(!activeBusiness)return false;if(activeBusiness.role==="owner")return true;if(activeBusiness.role==="admin"&&module!=="settings")return true;const granular=activeBusiness.permissions as GranularPermissions;return granular?.[module]?.[action]===true;},[activeBusiness]);
-  const hasRole=useCallback((...roles:BusinessMember["role"][])=>!!activeBusiness&&roles.includes(activeBusiness.role),[activeBusiness]);
+  const hasRole=useCallback((...roles:BusinessMember["role"])=>!!activeBusiness&&roles.includes(activeBusiness.role),[activeBusiness]);
   const canManageUsers=!!activeBusiness&&(activeBusiness.role==="owner"||activeBusiness.role==="admin"); const canManageSettings=!!activeBusiness&&(activeBusiness.role==="owner"||activeBusiness.role==="admin");
   const value=useMemo<BusinessContextValue>(()=>({user,memberships,activeBusiness,activeBusinessId,loading,selectBusiness,refreshBusinesses,createBusiness,hasPermission,can,hasRole,canManageUsers,canManageSettings}),[user,memberships,activeBusiness,activeBusinessId,loading,selectBusiness,refreshBusinesses,createBusiness,hasPermission,can,hasRole,canManageUsers,canManageSettings]);
   return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;
