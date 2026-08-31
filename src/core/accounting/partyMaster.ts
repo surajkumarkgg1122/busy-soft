@@ -28,7 +28,7 @@ export function normalizePartyInput(input: Partial<PartyMaster>, kind: PartyKind
   const name = String(input.name ?? "").trim();
   if (!name) throw new ValidationError("Party name is required.");
   const partyCode = String(input.partyCode ?? "").trim();
-  if (!partyCode) throw new ValidationError("Party code is required.");
+  if (!/^[-A-Za-z0-9_]{3,40}$/.test(partyCode)) throw new ValidationError("Party code must be 3–40 characters using letters, numbers, hyphens or underscores.");
   const businessId = String(input.businessId ?? "").trim();
   if (!businessId) throw new ValidationError("Party business is required.");
   const ledgerAccountId = String(input.ledgerAccountId ?? "").trim();
@@ -39,22 +39,29 @@ export function normalizePartyInput(input: Partial<PartyMaster>, kind: PartyKind
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ValidationError("Enter a valid email address.");
   const address = input.address ?? { line1: "", city: "", state: "", pincode: "", country: "India" };
   if (!address.city?.trim() || !address.state?.trim()) throw new ValidationError("Party city and state are required.");
-  if (!/^\d{6}$/.test(address.pincode ?? "")) throw new ValidationError("Party pincode must be 6 digits.");
+  if (!/^[1-9]\d{5}$/.test(address.pincode ?? "")) throw new ValidationError("Party pincode must be a valid 6-digit Indian pincode.");
   const gst = input.gst ?? { type: "unregistered" as PartyRegistrationType };
+  if (!["regular", "composition", "unregistered", "other"].includes(gst.type)) throw new ValidationError("Invalid GST registration type.");
   const gstType = gst.type;
   let gstin = gst.gstin?.trim().toUpperCase();
-  if ((gstType === "regular" || gstType === "composition") && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin ?? "")) throw new ValidationError("Enter a valid GSTIN for a registered party.");
+  if ((gstType === "regular" || gstType === "composition") && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin ?? "")) {
+    throw new ValidationError("Enter a valid GSTIN for a registered party.");
+  }
   if (gstType === "unregistered" || gstType === "other") gstin = undefined;
   const openingBalance = Number(input.openingBalance ?? 0);
   if (!Number.isSafeInteger(openingBalance) || openingBalance < 0) throw new ValidationError("Opening balance must be a non-negative integer minor-unit amount.");
   const creditLimit = Number(input.creditLimit ?? 0);
   if (!Number.isSafeInteger(creditLimit) || creditLimit < 0) throw new ValidationError("Credit limit must be a non-negative integer minor-unit amount.");
+  const openingBalanceType = input.openingBalanceType ?? (kind === "customer" ? "debit" : "credit");
+  if (openingBalanceType !== "debit" && openingBalanceType !== "credit") throw new ValidationError("Invalid opening balance type.");
+  const status = input.status ?? "active";
+  if (status !== "active" && status !== "inactive") throw new ValidationError("Invalid party status.");
   return {
     businessId, partyCode, name, kind, phone, email,
     address: { line1: address.line1?.trim() ?? "", line2: address.line2?.trim(), city: address.city.trim(), district: address.district?.trim(), state: address.state.trim(), pincode: address.pincode.trim(), country: address.country?.trim() || "India" },
     gst: { type: gstType, ...(gstin ? { gstin } : {}) },
-    openingBalance, openingBalanceType: input.openingBalanceType ?? (kind === "customer" ? "debit" : "credit"), creditLimit,
-    status: input.status ?? "active", ledgerAccountId,
+    openingBalance, openingBalanceType, creditLimit,
+    status, ledgerAccountId,
   };
 }
 
@@ -68,7 +75,7 @@ export async function savePartyMaster(repo: AccountingRepository, deps: { ids: {
     const expectedType = kind === "customer" ? "asset" : "liability";
     if (ledger.type !== expectedType) throw new ValidationError(`Party ledger must be an active ${expectedType} account.`);
     const now = deps.clock.now();
-    const party: PartyMaster = { id: deps.ids.next(kind === "customer" ? "cust" : "supp"), ...normalized, createdAt: now, updatedAt: now };
+    const party: PartyMaster = { id: normalized.partyCode, ...normalized, createdAt: now, updatedAt: now };
     await tx.saveBusinessDocument("parties", party.id, party as unknown as Record<string, unknown>);
     await tx.saveAuditEvent({ id: deps.ids.next("audit"), businessId: party.businessId, entityType: "party", entityId: party.id, action: "PARTY_CREATED", userId, timestamp: now, after: party as unknown as Record<string, unknown> });
     return party;
