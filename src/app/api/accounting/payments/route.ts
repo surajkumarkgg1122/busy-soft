@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminServices } from "@/infrastructure/firebase/admin";
 import { createAdminAccountingRepository } from "@/infrastructure/firebase/adminAccountingRepository";
-import { postPayment, postReceipt } from "@/core/accounting/transactions";
+import { postPaymentIdempotent, postReceiptIdempotent } from "@/core/accounting/settlements";
 import { ValidationError } from "@/core/accounting/errors";
 
 export const runtime = "nodejs";
@@ -44,7 +44,7 @@ export async function POST(request:Request){
     const fySnap=await businessRef.collection("financialYears").doc(fyId).get();if(!fySnap.exists)throw new ValidationError(`Financial year ${fyId} does not exist. Configure the financial year before posting payments.`);
     const bankAccount=bankAccountId??DEFAULT_BANK_ACCOUNT;const cashName=await normalizeAccountName(db,businessId,DEFAULT_CASH_ACCOUNT);let bankName="";if(paymentMethod.toLowerCase()!=="cash")bankName=await normalizeAccountName(db,businessId,bankAccount);
     const repo=createAdminAccountingRepository(businessId);const deps={ids:{next:(prefix:string)=>`${prefix}-${crypto.randomUUID()}`},clock:{now:()=>new Date().toISOString()}};const accountMap={party:DEFAULT_PARTY_ACCOUNT,cash:DEFAULT_CASH_ACCOUNT,bank:bankAccount};const narration=[paymentMethod,note].filter(Boolean).join(" · ");
-    const result=direction==="in"?await postReceipt(repo,{businessId,financialYearId:fyId,date,userId,partyId:customerId,amount:amountMinor,mode:paymentMethod.toLowerCase()==="cash"?"cash":"bank",accountMap,idempotencyKey,narration:narration||undefined},deps):await postPayment(repo,{businessId,financialYearId:fyId,date,userId,partyId:customerId,amount:amountMinor,mode:paymentMethod.toLowerCase()==="cash"?"cash":"bank",accountId:DEFAULT_PARTY_ACCOUNT,accountMap,idempotencyKey,narration:narration||undefined},deps);
+    const result=direction==="in"?await postReceiptIdempotent(repo,{businessId,financialYearId:fyId,date,userId,partyId:customerId,amount:amountMinor,mode:paymentMethod.toLowerCase()==="cash"?"cash":"bank",accountMap,idempotencyKey,narration:narration||undefined},deps):await postPaymentIdempotent(repo,{businessId,financialYearId:fyId,date,userId,partyId:customerId,amount:amountMinor,mode:paymentMethod.toLowerCase()==="cash"?"cash":"bank",accountMap,idempotencyKey,narration:narration||undefined},deps);
     return NextResponse.json({success:true,result:{voucher:result.voucher,customer:{id:customerId,name:String(customerSnap.data()?.name??"")},accountName:paymentMethod.toLowerCase()==="cash"?cashName:bankName}});
   }catch(error){const message=error instanceof Error?error.message:"Could not post payment.";const status=/AUTH|required.*business|date|amount|customer|account|financial year/i.test(message)?400:/permission|member/i.test(message)?403:/duplicate|idempotency/i.test(message)?409:500;return jsonError(message,status);}
 }
