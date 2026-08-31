@@ -1,5 +1,6 @@
-import type { AccountingRepository, Money } from "./types";
+import type { AccountingRepository, LedgerEntry, Money, Voucher, VoucherLine } from "./types";
 import { ValidationError } from "./errors";
+import { validateVoucherLines } from "./ledger";
 
 export type PartyKind = "customer" | "supplier";
 export type PartyStatus = "active" | "inactive";
@@ -20,11 +21,12 @@ export interface PartyMaster {
   creditLimit: Money;
   status: PartyStatus;
   ledgerAccountId: string;
+  openingVoucherId?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export function normalizePartyInput(input: Partial<PartyMaster>, kind: PartyKind): Omit<PartyMaster, "id" | "createdAt" | "updatedAt"> {
+function normalizePartyInput(input: Partial<PartyMaster>, kind: PartyKind): Omit<PartyMaster, "id" | "createdAt" | "updatedAt"> {
   const name = String(input.name ?? "").trim();
   if (!name) throw new ValidationError("Party name is required.");
   const partyCode = String(input.partyCode ?? "").trim();
@@ -39,7 +41,7 @@ export function normalizePartyInput(input: Partial<PartyMaster>, kind: PartyKind
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ValidationError("Enter a valid email address.");
   const address = input.address ?? { line1: "", city: "", state: "", pincode: "", country: "India" };
   if (!address.city?.trim() || !address.state?.trim()) throw new ValidationError("Party city and state are required.");
-  if (!/^[1-9]\d{5}$/.test(address.pincode ?? "")) throw new ValidationError("Party pincode must be a valid 6-digit Indian pincode.");
+  if (!/^\d{6}$/.test(address.pincode ?? "")) throw new ValidationError("Party pincode must be a valid 6-digit Indian pincode.");
   const gst = input.gst ?? { type: "unregistered" as PartyRegistrationType };
   if (!["regular", "composition", "unregistered", "other"].includes(gst.type)) throw new ValidationError("Invalid GST registration type.");
   const gstType = gst.type;
@@ -54,28 +56,59 @@ export function normalizePartyInput(input: Partial<PartyMaster>, kind: PartyKind
   if (openingBalanceType !== "debit" && openingBalanceType !== "credit") throw new ValidationError("Invalid opening balance type.");
   const status = input.status ?? "active";
   if (status !== "active" && status !== "inactive") throw new ValidationError("Invalid party status.");
-  return {
-    businessId, partyCode, name, kind, phone, email,
-    address: { line1: address.line1?.trim() ?? "", line2: address.line2?.trim(), city: address.city.trim(), district: address.district?.trim(), state: address.state.trim(), pincode: address.pincode.trim(), country: address.country?.trim() || "India" },
-    gst: { type: gstType, ...(gstin ? { gstin } : {}) },
-    openingBalance, openingBalanceType, creditLimit,
-    status, ledgerAccountId,
-  };
+  return { businessId, partyCode, name, kind, phone, email, address: { line1: address.line1?.trim() ?? "", line2: address.line2?.trim(), city: address.city.trim(), district: address.district?.trim(), state: address.state.trim(), pincode: address.pincode.trim(), country: address.country?.trim() || "India" }, gst: { type: gstType, ...(gstin ? { gstin } : {}) }, openingBalance, openingBalanceType, creditLimit, status, ledgerAccountId };
 }
 
-export async function savePartyMaster(repo: AccountingRepository, deps: { ids: { next(prefix: string): string }; clock: { now(): string } }, input: Partial<PartyMaster>, kind: PartyKind, userId: string): Promise<PartyMaster> {
+function openingVoucherIdempotencyKey(party: PartyMaster, key: string) { return `party-opening:${party.kind}:${party.id}:${key}`; }
+
+export async function savePartyMaster(repo: AccountingRepository, deps: { ids: { next(prefix: string): string }; clock: { now(): string } }, input: Partial<PartyMaster>, kind: PartyKind, userId: string, financialYearId: string, idempotencyKey: string): Promise<PartyMaster> {
   return repo.runInTransaction(async (tx) => {
     const normalized = normalizePartyInput(input, kind);
     const existing = await tx.getBusinessDocument("parties", normalized.partyCode);
     if (existing) throw new ValidationError(`Party code already exists: ${normalized.partyCode}`);
+    const fy = await tx.getFinancialYear(financialYearId);
+    if (!fy || fy.businessId !== normalized.businessId || fy.locked) throw new ValidationError("Active financial year is required for party creation.");
     const ledger = await tx.getAccount(normalized.ledgerAccountId);
     if (!ledger || ledger.businessId !== normalized.businessId || !ledger.active) throw new ValidationError("Selected party ledger account is invalid.");
     const expectedType = kind === "customer" ? "asset" : "liability";
     if (ledger.type !== expectedType) throw new ValidationError(`Party ledger must be an active ${expectedType} account.`);
+    const openingAccount = normalized.openingBalance > 0 ? await tx.getAccount("acct-opening-balance") : null;
+    if (normalized.openingBalance > 0 && (!openingAccount || openingAccount.businessId !== normalized.businessId || !openingAccount.active || openingAccount.type !== "equity")) throw new ValidationError("Opening balance adjustment account is not configured.");
+    const openingKey = openingVoucherIdempotencyKey({ ...normalized, id: normalized.partyCode } as PartyMaster, idempotencyKey);
+    const existingOpening = normalized.openingBalance > 0 ? await tx.getVoucherByIdempotencyKey(normalized.businessId, financialYearId, openingKey) : null;
+    const sequenceId = `${financialYearId}_OPENING`.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sequence = normalized.openingBalance > 0 && !existingOpening ? await tx.getBusinessDocument("voucherSequences", sequenceId) : null;
     const now = deps.clock.now();
     const party: PartyMaster = { id: normalized.partyCode, ...normalized, createdAt: now, updatedAt: now };
+    let openingVoucher: Voucher | null = null;
+    let openingLines: VoucherLine[] = [];
+    let openingLedgerEntries: LedgerEntry[] = [];
+    if (normalized.openingBalance > 0) {
+      const next = Number(sequence?.nextNumber ?? 1);
+      if (!Number.isSafeInteger(next) || next < 1) throw new ValidationError("Invalid opening voucher sequence.");
+      const voucherId = deps.ids.next("vch");
+      const voucherNumber = `OB-${String(next).padStart(6, "0")}`;
+      const debitParty = normalized.openingBalanceType === "debit";
+      const inputLines = [
+        { accountId: debitParty ? normalized.ledgerAccountId : "acct-opening-balance", partyId: normalized.partyCode, description: "Party opening balance", debit: normalized.openingBalance, credit: 0 },
+        { accountId: debitParty ? "acct-opening-balance" : normalized.ledgerAccountId, partyId: normalized.partyCode, description: "Opening balance adjustment", debit: 0, credit: normalized.openingBalance },
+      ];
+      openingLines = inputLines.map((line, index) => ({ ...line, lineId: deps.ids.next("line"), voucherId, businessId: normalized.businessId, lineNo: index + 1 }));
+      validateVoucherLines(openingLines);
+      openingLedgerEntries = openingLines.map(line => ({ ...line, date: fy.startDate, voucherType: "OPENING", voucherNumber, createdAt: now }));
+      openingVoucher = { id: voucherId, businessId: normalized.businessId, financialYearId, voucherType: "OPENING", voucherNumber, date: fy.startDate, status: "posted", referenceType: "party_opening", referenceId: normalized.partyCode, narration: `Opening balance for ${normalized.name}`, totalDebit: normalized.openingBalance, totalCredit: normalized.openingBalance, createdBy: userId, createdAt: now, updatedAt: now, idempotencyKey: openingKey };
+      party.openingVoucherId = voucherId;
+    }
+
     await tx.saveBusinessDocument("parties", party.id, party as unknown as Record<string, unknown>);
-    await tx.saveAuditEvent({ id: deps.ids.next("audit"), businessId: party.businessId, entityType: "party", entityId: party.id, action: "PARTY_CREATED", userId, timestamp: now, after: party as unknown as Record<string, unknown> });
+    if (openingVoucher) {
+      await tx.saveVoucher(openingVoucher);
+      await tx.saveVoucherLines(openingLines);
+      await tx.saveLedgerEntries(openingLedgerEntries);
+      await tx.saveAtomicDocument({ id: deps.ids.next("acctdoc"), businessId: normalized.businessId, financialYearId, type: "opening", voucherId: openingVoucher.id, idempotencyKey: openingKey, status: "posted", date: fy.startDate, createdBy: userId, createdAt: now, payload: { kind: "partyOpening", partyId: party.id, partyKind: kind, amount: normalized.openingBalance, balanceType: normalized.openingBalanceType } });
+      await tx.saveBusinessDocument("voucherSequences", sequenceId, { businessId: normalized.businessId, financialYearId, voucherType: "OPENING", prefix: "OB", nextNumber: Number(sequence?.nextNumber ?? 1) + 1, updatedAt: now });
+    }
+    await tx.saveAuditEvent({ id: deps.ids.next("audit"), businessId: party.businessId, entityType: "party", entityId: party.id, action: "PARTY_CREATED", userId, timestamp: now, after: party as unknown as Record<string, unknown>, metadata: openingVoucher ? { openingVoucherId: openingVoucher.id } : undefined });
     return party;
   });
 }
@@ -97,7 +130,7 @@ export async function updatePartyMaster(repo: AccountingRepository, deps: { ids:
     if (normalized.ledgerAccountId !== existing.ledgerAccountId) throw new ValidationError("Party ledger account cannot be changed after creation.");
     if (normalized.openingBalance !== existing.openingBalance || normalized.openingBalanceType !== existing.openingBalanceType) throw new ValidationError("Opening balance cannot be changed from Party Master after creation; use an accounting voucher.");
     const now = deps.clock.now();
-    const party: PartyMaster = { id: partyId, ...normalized, createdAt: existing.createdAt, updatedAt: now };
+    const party: PartyMaster = { id: partyId, ...normalized, createdAt: existing.createdAt, updatedAt: now, ...(existing.openingVoucherId ? { openingVoucherId: existing.openingVoucherId } : {}) };
     await tx.saveBusinessDocument("parties", party.id, party as unknown as Record<string, unknown>);
     await tx.saveAuditEvent({ id: deps.ids.next("audit"), businessId: party.businessId, entityType: "party", entityId: party.id, action: "PARTY_UPDATED", userId, timestamp: now, before: existingRaw, after: party as unknown as Record<string, unknown> });
     return party;
