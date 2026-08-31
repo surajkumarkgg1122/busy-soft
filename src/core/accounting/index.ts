@@ -21,4 +21,5 @@ export * from "./trustedCommands";
 export * from "./firestoreRepository";
 export * from "./inMemoryRepository";
 export * from "./selfTest";
+export * from "./stockSelfTest";
 export * from "./testCases";
