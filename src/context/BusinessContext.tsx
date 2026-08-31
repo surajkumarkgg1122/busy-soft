@@ -1,9 +1,8 @@
 "use client";
 
-import { collection, doc, getDoc, getDocs, setDoc, Timestamp, writeBatch } from "firebase/firestore";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { firebaseAuth, firestoreDb } from "../lib/firebase";
+import { firebaseAuth } from "../lib/firebase";
 import type { AppUser, Business, BusinessMember, UserBusinessMembership, MemberPermissions, PermissionModule, PermissionAction, GranularPermissions } from "../types";
 
 interface BusinessMembership extends BusinessMember { business: Business; }
@@ -22,31 +21,59 @@ interface BusinessContextValue {
 export interface CreateBusinessInput { name: string; legalName?: string; businessType?: string; phone?: string; email?: string; state?: string; district?: string; city?: string; pincode?: string; gstin?: string; gstEnabled?: boolean; }
 const BusinessContext = createContext<BusinessContextValue | undefined>(undefined);
 const ACTIVE_BUSINESS_KEY = "erp.activeBusinessId";
-const TRIAL_DAYS = 14;
 
-const ROLE_DEFAULTS: Record<BusinessMember["role"], GranularPermissions> = {
-  owner: { sales:{view:true,create:true,edit:true,delete:true,print:true,export:true,approve:true}, purchases:{view:true,create:true,edit:true,delete:true,print:true,export:true,approve:true}, inventory:{view:true,create:true,edit:true,delete:true,print:true,export:true}, payments:{view:true,create:true,edit:true,delete:true,print:true,export:true}, expenses:{view:true,create:true,edit:true,delete:true,print:true,export:true}, reports:{view:true,print:true,export:true}, settings:{view:true,create:true,edit:true,delete:true}, parties:{view:true,create:true,edit:true,delete:true,export:true}, items:{view:true,create:true,edit:true,delete:true,export:true}, cashBank:{view:true,create:true,edit:true,delete:true,print:true,export:true}, gst:{view:true,create:true,edit:true,delete:true,export:true} },
-  admin: { sales:{view:true,create:true,edit:true,delete:true,print:true,export:true,approve:true}, purchases:{view:true,create:true,edit:true,delete:true,print:true,export:true,approve:true}, inventory:{view:true,create:true,edit:true,delete:true,print:true,export:true}, payments:{view:true,create:true,edit:true,delete:true,print:true,export:true}, expenses:{view:true,create:true,edit:true,delete:true,print:true,export:true}, reports:{view:true,print:true,export:true}, settings:{view:true,create:true,edit:true}, parties:{view:true,create:true,edit:true,delete:true,export:true}, items:{view:true,create:true,edit:true,delete:true,export:true}, cashBank:{view:true,create:true,edit:true,delete:true,print:true,export:true}, gst:{view:true,create:true,edit:true,delete:true,export:true} },
-  manager: { sales:{view:true,create:true,edit:true,print:true,export:true}, purchases:{view:true,create:true,edit:true,print:true,export:true}, inventory:{view:true,create:true,edit:true,print:true,export:true}, payments:{view:true,create:true,edit:true,print:true}, expenses:{view:true,create:true,edit:true}, reports:{view:true,print:true,export:true}, parties:{view:true,create:true,edit:true}, items:{view:true,create:true,edit:true}, cashBank:{view:true,create:true,edit:true,print:true}, gst:{view:true,export:true} },
-  accountant: { sales:{view:true,create:true,edit:true,print:true,export:true}, purchases:{view:true,create:true,edit:true,print:true,export:true}, inventory:{view:true,export:true}, payments:{view:true,create:true,edit:true,print:true,export:true}, expenses:{view:true,create:true,edit:true,print:true,export:true}, reports:{view:true,print:true,export:true}, parties:{view:true,create:true,edit:true,export:true}, items:{view:true,export:true}, cashBank:{view:true,create:true,edit:true,print:true,export:true}, gst:{view:true,export:true} },
-  sales: { sales:{view:true,create:true,edit:true,print:true}, parties:{view:true,create:true,edit:true}, items:{view:true}, payments:{view:true,create:true,print:true} },
-  inventory: { inventory:{view:true,create:true,edit:true,print:true}, items:{view:true,create:true,edit:true}, parties:{view:true} },
-  viewer: { sales:{view:true,print:true}, purchases:{view:true,print:true}, inventory:{view:true}, payments:{view:true}, expenses:{view:true}, reports:{view:true,print:true}, parties:{view:true}, items:{view:true}, cashBank:{view:true}, gst:{view:true} },
+async function authHeaders() {
+  if (!firebaseAuth?.currentUser) throw new Error("You must be signed in.");
+  const token = await firebaseAuth.currentUser.getIdToken();
+  return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+}
+
+async function workspaceRequest(path: string, init?: RequestInit) {
+  const headers = await authHeaders();
+  const response = await fetch(path, { ...init, headers: { ...headers, ...(init?.headers || {}) }, cache: "no-store" });
+  const payload = await response.json().catch(() => ({ success:false, error:"Invalid server response." }));
+  if (!response.ok || !payload.success) throw new Error(String(payload.error || "Workspace request failed."));
+  return payload;
+}
+
+const BusinessProvider = ({children}:{children:ReactNode}) => {
+  const [user,setUser]=useState<User|null>(null); const [memberships,setMemberships]=useState<BusinessMembership[]>([]); const [activeBusinessId,setActiveBusinessId]=useState<string|null>(null); const [loading,setLoading]=useState(true);
+
+  const refreshBusinesses=useCallback(async()=>{
+    if(!firebaseAuth?.currentUser){setMemberships([]);setActiveBusinessId(null);return;}
+    const payload=await workspaceRequest("/api/workspace");
+    const loaded=(payload.memberships||[]) as BusinessMembership[];
+    setMemberships(loaded);
+    const stored=window.localStorage.getItem(ACTIVE_BUSINESS_KEY);
+    if(stored&&loaded.some(i=>i.business.businessId===stored)) setActiveBusinessId(stored);
+    else { const first=loaded[0]?.business.businessId??null; setActiveBusinessId(first); if(first)window.localStorage.setItem(ACTIVE_BUSINESS_KEY,first); else window.localStorage.removeItem(ACTIVE_BUSINESS_KEY); }
+  },[]);
+
+  useEffect(()=>{
+    if(!firebaseAuth){setLoading(false);return undefined;}
+    return onAuthStateChanged(firebaseAuth,async nextUser=>{
+      setUser(nextUser);setLoading(true);
+      try { if(nextUser) await refreshBusinesses(); else {setMemberships([]);setActiveBusinessId(null);} }
+      catch(error){console.error("Could not initialize user workspace:",error);setMemberships([]);setActiveBusinessId(null);}
+      finally{setLoading(false);}
+    });
+  },[refreshBusinesses]);
+
+  const selectBusiness=useCallback((businessId:string)=>{if(!memberships.some(i=>i.business.businessId===businessId))return;setActiveBusinessId(businessId);window.localStorage.setItem(ACTIVE_BUSINESS_KEY,businessId);},[memberships]);
+
+  const createBusiness=useCallback(async(input:CreateBusinessInput)=>{
+    const payload=await workspaceRequest("/api/workspace",{method:"POST",body:JSON.stringify({input})});
+    await refreshBusinesses(); selectBusiness(String(payload.businessId)); return String(payload.businessId);
+  },[refreshBusinesses,selectBusiness]);
+
+  const activeBusiness=useMemo(()=>memberships.find(i=>i.business.businessId===activeBusinessId)??null,[memberships,activeBusinessId]);
+  const hasPermission=useCallback((permission:PermissionKey)=>activeBusiness?.role==="owner"||activeBusiness?.role==="admin"||activeBusiness?.permissions?.[permission]===true,[activeBusiness]);
+  const can=useCallback((module:PermissionModule,action:PermissionAction="view")=>{if(!activeBusiness)return false;if(activeBusiness.role==="owner")return true;if(activeBusiness.role==="admin"&&module!=="settings")return true;const granular=activeBusiness.permissions as GranularPermissions;return granular?.[module]?.[action]===true;},[activeBusiness]);
+  const hasRole=useCallback((...roles:BusinessMember["role"][])=>!!activeBusiness&&roles.includes(activeBusiness.role),[activeBusiness]);
+  const canManageUsers=!!activeBusiness&&(activeBusiness.role==="owner"||activeBusiness.role==="admin"); const canManageSettings=!!activeBusiness&&(activeBusiness.role==="owner"||activeBusiness.role==="admin");
+  const value=useMemo<BusinessContextValue>(()=>({user,memberships,activeBusiness,activeBusinessId,loading,selectBusiness,refreshBusinesses,createBusiness,hasPermission,can,hasRole,canManageUsers,canManageSettings}),[user,memberships,activeBusiness,activeBusinessId,loading,selectBusiness,refreshBusinesses,createBusiness,hasPermission,can,hasRole,canManageUsers,canManageSettings]);
+  return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;
 };
 
-async function ensureUserProfile(user: User) { if (!firestoreDb) return; const userRef=doc(firestoreDb,"users",user.uid); const snapshot=await getDoc(userRef); const now=Timestamp.now(); if(!snapshot.exists()){const profile:AppUser={uid:user.uid,name:user.displayName?.trim()||user.email?.split("@")[0]||"User",email:user.email||"",phone:user.phoneNumber||"",photoURL:user.photoURL||null,status:"active",createdAt:now,updatedAt:now,lastLoginAt:now};await setDoc(userRef,profile);return;} await setDoc(userRef,{name:user.displayName?.trim()||snapshot.data().name||user.email?.split("@")[0]||"User",email:user.email||snapshot.data().email||"",phone:user.phoneNumber||snapshot.data().phone||"",photoURL:user.photoURL||snapshot.data().photoURL||null,lastLoginAt:now,updatedAt:now},{merge:true}); }
-
-export function BusinessProvider({children}:{children:ReactNode}){
- const [user,setUser]=useState<User|null>(null); const [memberships,setMemberships]=useState<BusinessMembership[]>([]); const [activeBusinessId,setActiveBusinessId]=useState<string|null>(null); const [loading,setLoading]=useState(true);
- const refreshBusinesses=useCallback(async()=>{if(!firebaseAuth||!firestoreDb||!firebaseAuth.currentUser){setMemberships([]);setActiveBusinessId(null);return;}const uid=firebaseAuth.currentUser.uid;const snapshot=await getDocs(collection(firestoreDb,"users",uid,"businessMemberships"));const loaded:BusinessMembership[]=[];for(const membershipDoc of snapshot.docs){const membership=membershipDoc.data() as UserBusinessMembership;if(membership.status!=="active")continue;const businessId=membership.businessId||membershipDoc.id;const businessSnapshot=await getDoc(doc(firestoreDb,"businesses",businessId));if(!businessSnapshot.exists())continue;loaded.push({...membership,business:businessSnapshot.data() as Business});}setMemberships(loaded);const stored=window.localStorage.getItem(ACTIVE_BUSINESS_KEY);if(stored&&loaded.some(i=>i.business.businessId===stored))setActiveBusinessId(stored);else{const first=loaded[0]?.business.businessId??null;setActiveBusinessId(first);if(first)window.localStorage.setItem(ACTIVE_BUSINESS_KEY,first);else window.localStorage.removeItem(ACTIVE_BUSINESS_KEY);}},[]);
- useEffect(()=>{if(!firebaseAuth){setLoading(false);return undefined;}return onAuthStateChanged(firebaseAuth,async nextUser=>{setUser(nextUser);setLoading(true);try{if(nextUser)await ensureUserProfile(nextUser);await refreshBusinesses();}catch(error){console.error("Could not initialize user workspace:",error);setMemberships([]);setActiveBusinessId(null);}finally{setLoading(false);}});},[refreshBusinesses]);
- const selectBusiness=useCallback((businessId:string)=>{if(!memberships.some(i=>i.business.businessId===businessId))return;setActiveBusinessId(businessId);window.localStorage.setItem(ACTIVE_BUSINESS_KEY,businessId);},[memberships]);
- const createBusiness=useCallback(async(input:CreateBusinessInput)=>{if(!firebaseAuth||!firestoreDb||!firebaseAuth.currentUser)throw new Error("You must be signed in to create a business.");const uid=firebaseAuth.currentUser.uid;const businessRef=doc(collection(firestoreDb,"businesses"));const membershipRef=doc(firestoreDb,"businesses",businessRef.id,"members",uid);const userMembershipRef=doc(firestoreDb,"users",uid,"businessMemberships",businessRef.id);const now=Timestamp.now();const trialExpiresAt=Timestamp.fromMillis(now.toMillis()+TRIAL_DAYS*86400000);const business:Business={businessId:businessRef.id,name:input.name.trim(),legalName:input.legalName?.trim()||input.name.trim(),businessType:input.businessType?.trim()||"general",phone:input.phone?.trim()||"",email:input.email?.trim()||firebaseAuth.currentUser.email||"",address:{line1:"",line2:"",city:input.city?.trim()||"",district:input.district?.trim()||"",state:input.state?.trim()||"",pincode:input.pincode?.trim()||"",country:"India"},gst:{enabled:input.gstEnabled??Boolean(input.gstin),gstin:input.gstin?.trim()||"",registrationType:input.gstin?"regular":"unregistered"},financialYear:{startMonth:4,startDay:1},currency:"INR",timezone:"Asia/Kolkata",ownerId:uid,trial:{status:"active",planId:"trial",startsAt:now,expiresAt:trialExpiresAt},status:"active",createdAt:now,updatedAt:now};const rolePermissions=ROLE_DEFAULTS.owner;const legacy:MemberPermissions={sales:true,purchases:true,inventory:true,payments:true,expenses:true,reports:true,settings:true};const permissions={...legacy,...rolePermissions};const membership:BusinessMember={uid,role:"owner",status:"active",permissions,joinedAt:now};const userMembership:UserBusinessMembership={...membership,businessId:businessRef.id};const batch=writeBatch(firestoreDb);batch.set(businessRef,business);batch.set(membershipRef,membership);batch.set(userMembershipRef,userMembership);await batch.commit();await refreshBusinesses();selectBusiness(businessRef.id);return businessRef.id;},[refreshBusinesses,selectBusiness]);
- const activeBusiness=useMemo(()=>memberships.find(i=>i.business.businessId===activeBusinessId)??null,[memberships,activeBusinessId]);
- const hasPermission=useCallback((permission:PermissionKey)=>activeBusiness?.role==="owner"||activeBusiness?.role==="admin"||activeBusiness?.permissions?.[permission]===true,[activeBusiness]);
- const can=useCallback((module:PermissionModule,action:PermissionAction="view")=>{if(!activeBusiness)return false;if(activeBusiness.role==="owner")return true;if(activeBusiness.role==="admin"&&module!=="settings")return true;const granular=activeBusiness.permissions as GranularPermissions;return granular?.[module]?.[action]===true;},[activeBusiness]);
- const hasRole=useCallback((...roles:BusinessMember["role"][])=>!!activeBusiness&&roles.includes(activeBusiness.role),[activeBusiness]);
- const canManageUsers=!!activeBusiness&&(activeBusiness.role==="owner"||activeBusiness.role==="admin");const canManageSettings=!!activeBusiness&&(activeBusiness.role==="owner"||activeBusiness.role==="admin");
- const value=useMemo<BusinessContextValue>(()=>({user,memberships,activeBusiness,activeBusinessId,loading,selectBusiness,refreshBusinesses,createBusiness,hasPermission,can,hasRole,canManageUsers,canManageSettings}),[user,memberships,activeBusiness,activeBusinessId,loading,selectBusiness,refreshBusinesses,createBusiness,hasPermission,can,hasRole,canManageUsers,canManageSettings]);return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;
-}
+export { BusinessProvider };
 export function useBusiness(){const context=useContext(BusinessContext);if(!context)throw new Error("useBusiness must be used inside BusinessProvider");return context;}
