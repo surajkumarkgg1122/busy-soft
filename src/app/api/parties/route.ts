@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { Firestore } from "firebase-admin/firestore";
 import { getAdminServices } from "@/infrastructure/firebase/admin";
 import { createAdminAccountingRepository } from "@/infrastructure/firebase/adminAccountingRepository";
 import { createParty } from "@/application/party/service";
@@ -23,10 +24,11 @@ function permissionsFor(member: BusinessMember): AccountingPermission[] {
   return member.permissions?.parties?.create ? ["PARTY_CREATE"] : [];
 }
 
-async function currentFinancialYear(db: FirebaseFirestore.Firestore, businessId: string): Promise<string> {
-  const snapshot = await db.collection("businesses").doc(businessId).collection("financialYears").where("locked", "==", false).orderBy("startDate", "desc").limit(1).get();
-  if (snapshot.empty) throw new Error("No active financial year is configured for this business.");
-  return snapshot.docs[0].id;
+async function currentFinancialYear(db: Firestore, businessId: string): Promise<string> {
+  const snapshot = await db.collection("businesses").doc(businessId).collection("financialYears").orderBy("startDate", "desc").limit(10).get();
+  const active = snapshot.docs.find(doc => doc.data().locked !== true);
+  if (!active) throw new Error("No active financial year is configured for this business.");
+  return active.id;
 }
 
 export async function POST(request: Request) {
