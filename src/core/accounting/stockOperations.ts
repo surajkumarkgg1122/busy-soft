@@ -1,4 +1,4 @@
-import type { AccountingRepository, AtomicAccountingDocument, Money, PostingResult, StockMovement, VoucherLineInput } from "./types";
+import type { AccountingRepository, AtomicAccountingDocument, AuditEvent, Money, PostingResult, StockMovement, VoucherLineInput } from "./types";
 import { ValidationError } from "./errors";
 import { postIdempotentVoucher } from "./atomic";
 import { adjustmentMovement, assertAvailableStock, balanceFor, buildStockLedger, normalizeWarehouseId, reconcileCachedStock, transferMovements, type StockAdjustmentInput, type StockLedgerRow, type StockTransferInput } from "./stock";
@@ -31,28 +31,36 @@ export async function postStockAdjustment(repo:AccountingRepository,input:StockA
 }
 
 export interface StockTransferCommand extends StockTransferInput { idempotencyKey:string; }
-export async function postStockTransfer(repo:AccountingRepository,input:StockTransferCommand,deps:StockOperationDeps):Promise<PostingResult>{
+export interface StockTransferResult { operationId:string; businessId:string; financialYearId:string; itemId:string; fromWarehouseId:string; toWarehouseId:string; quantity:number; unitCost:Money; stockMovements:[StockMovement,StockMovement]; }
+
+/** A warehouse transfer has no net GL effect, so it is intentionally NOT a financial voucher. */
+export async function postStockTransfer(repo:AccountingRepository,input:StockTransferCommand,deps:StockOperationDeps):Promise<StockTransferResult>{
   if(!input.businessId||!input.financialYearId||!input.createdBy) throw new ValidationError("Business, financial year and user are required for stock transfer.");
   if(!input.idempotencyKey) throw new ValidationError("Stock transfer idempotency key is required.");
-  if(normalizeWarehouseId(input.fromWarehouseId)===normalizeWarehouseId(input.toWarehouseId)) throw new ValidationError("Source and destination warehouses must be different.");
+  const fromWarehouseId=normalizeWarehouseId(input.fromWarehouseId);
+  const toWarehouseId=normalizeWarehouseId(input.toWarehouseId);
+  if(fromWarehouseId===toWarehouseId) throw new ValidationError("Source and destination warehouses must be different.");
+
   return repo.runInTransaction(async tx=>{
-    const pre=await tx.getVoucherByIdempotencyKey(input.businessId,input.financialYearId,input.idempotencyKey);
-    if(pre) return postIdempotentVoucher(tx,{businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"STOCK_TRANSFER",prefix:"ST",date:input.date,createdBy:input.createdBy,narration:`Stock transfer ${input.itemId}`,lines:[],idempotencyKey:input.idempotencyKey},deps);
+    const existing=await tx.getBusinessDocument("stockTransfers",input.idempotencyKey);
+    if(existing){
+      return existing.result as StockTransferResult;
+    }
+
     const source=await tx.getStockMovementsForItem(input.itemId,input.fromWarehouseId,input.date);
     assertAvailableStock(source,{businessId:input.businessId,financialYearId:input.financialYearId,itemId:input.itemId,warehouseId:input.fromWarehouseId},input.quantity,input.date);
     const costState=balanceFor(source,{businessId:input.businessId,financialYearId:input.financialYearId,itemId:input.itemId,warehouseId:input.fromWarehouseId},input.date);
-    const [out,inMove]=transferMovements(input,deps.ids.next("stk"),deps.ids.next("stk"),deps.clock.now());
+    const [out,inMove]=transferMovements({...input,fromWarehouseId,toWarehouseId},deps.ids.next("stk"),deps.ids.next("stk"),deps.clock.now());
     const transferCost=input.unitCost>=0?input.unitCost:costState.quantity?Math.round(costState.value/costState.quantity):0;
     out.sourceId=`transfer:${input.idempotencyKey}`; inMove.sourceId=out.sourceId;
     out.unitCost=transferCost; inMove.unitCost=transferCost; out.value=Math.round(out.quantity*transferCost); inMove.value=out.value;
-    // Stock transfers have no net general-ledger effect. They are represented as
-    // a stock-operation document rather than manufacturing a false financial entry.
     const operationId=deps.ids.next("ST");
+    const result:StockTransferResult={operationId,businessId:input.businessId,financialYearId:input.financialYearId,itemId:input.itemId,fromWarehouseId,toWarehouseId,quantity:input.quantity,unitCost:transferCost,stockMovements:[out,inMove]};
     await tx.saveStockMovements([out,inMove]);
-    await tx.saveAtomicDocument(atomic({id:operationId,businessId:input.businessId,financialYearId:input.financialYearId,type:"journal",voucherId:operationId,idempotencyKey:input.idempotencyKey,date:input.date,createdBy:input.createdBy,createdAt:deps.clock.now(),payload:{operation:"stock_transfer",itemId:input.itemId,fromWarehouseId:normalizeWarehouseId(input.fromWarehouseId),toWarehouseId:normalizeWarehouseId(input.toWarehouseId),quantity:input.quantity,unitCost:transferCost}}));
-    const operationVoucher = { id: operationId, businessId:input.businessId, financialYearId:input.financialYearId, voucherType:"STOCK_TRANSFER", voucherNumber:operationId, date:input.date, status:"posted" as const, referenceType:"stock_transfer", referenceId:input.idempotencyKey, narration:`Stock transfer ${input.itemId}`, totalDebit:0, totalCredit:0, createdBy:input.createdBy, createdAt:deps.clock.now(), updatedAt:deps.clock.now(), idempotencyKey:input.idempotencyKey };
-    await tx.saveVoucher(operationVoucher);
-    return { voucher:operationVoucher, lines:[], ledgerEntries:[], stockMovements:[out,inMove] };
+    await tx.saveBusinessDocument("stockTransfers",input.idempotencyKey,{businessId:input.businessId,financialYearId:input.financialYearId,operationId,itemId:input.itemId,fromWarehouseId,toWarehouseId,quantity:input.quantity,unitCost:transferCost,result,createdAt:deps.clock.now()});
+    const audit:AuditEvent={id:deps.ids.next("audit"),businessId:input.businessId,entityType:"stock_transfer",entityId:operationId,action:"POST",userId:input.createdBy,timestamp:deps.clock.now(),metadata:{itemId:input.itemId,fromWarehouseId,toWarehouseId,quantity:input.quantity}};
+    await tx.saveAuditEvent(audit);
+    return result;
   });
 }
 
