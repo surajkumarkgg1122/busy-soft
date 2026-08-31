@@ -3,10 +3,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { firebaseAuth } from "../lib/firebase";
-import type { Business, BusinessMember, MemberPermissions, PermissionModule, PermissionAction, GranularPermissions } from "../types";
+import type { Business, BusinessMember, PermissionModule, PermissionAction, GranularPermissions } from "../types";
 
 interface BusinessMembership extends BusinessMember { business: Business; }
-export type PermissionKey = keyof MemberPermissions;
+export type PermissionKey = PermissionModule;
 
 interface BusinessContextValue {
   user: User | null; memberships: BusinessMembership[]; activeBusiness: BusinessMembership | null; activeBusinessId: string | null; loading: boolean;
@@ -75,9 +75,9 @@ const BusinessProvider = ({children}:{children:ReactNode}) => {
   },[refreshBusinesses]);
 
   const activeBusiness=useMemo(()=>memberships.find(i=>i.business.businessId===activeBusinessId)??null,[memberships,activeBusinessId]);
-  const hasPermission=useCallback((permission:PermissionKey)=>activeBusiness?.role==="owner"||activeBusiness?.role==="admin"||activeBusiness?.permissions?.[permission]===true,[activeBusiness]);
+  const hasPermission=useCallback((permission:PermissionKey)=>{if(!activeBusiness)return false;if(activeBusiness.role==="owner"||activeBusiness.role==="admin")return true;return activeBusiness.permissions?.[permission]?.view===true;},[activeBusiness]);
   const can=useCallback((module:PermissionModule,action:PermissionAction="view")=>{if(!activeBusiness)return false;if(activeBusiness.role==="owner")return true;if(activeBusiness.role==="admin"&&module!=="settings")return true;const granular=activeBusiness.permissions as GranularPermissions;return granular?.[module]?.[action]===true;},[activeBusiness]);
-  const hasRole=useCallback((...roles:BusinessMember["role"])=>!!activeBusiness&&roles.includes(activeBusiness.role),[activeBusiness]);
+  const hasRole=useCallback((...roles:BusinessMember["role"][])=>!!activeBusiness&&roles.includes(activeBusiness.role),[activeBusiness]);
   const canManageUsers=!!activeBusiness&&(activeBusiness.role==="owner"||activeBusiness.role==="admin"); const canManageSettings=!!activeBusiness&&(activeBusiness.role==="owner"||activeBusiness.role==="admin");
   const value=useMemo<BusinessContextValue>(()=>({user,memberships,activeBusiness,activeBusinessId,loading,selectBusiness,refreshBusinesses,createBusiness,hasPermission,can,hasRole,canManageUsers,canManageSettings}),[user,memberships,activeBusiness,activeBusinessId,loading,selectBusiness,refreshBusinesses,createBusiness,hasPermission,can,hasRole,canManageUsers,canManageSettings]);
   return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;
