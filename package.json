@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "npx --yes vitest run",
+    "test:watch": "npx --yes vitest"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
