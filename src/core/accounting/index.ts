@@ -5,6 +5,7 @@ export * from "./gst";
 export * from "./inventory";
 export * from "./stock";
 export * from "./stockOperations";
+export * from "./openingStock";
 export * from "./money";
 export * from "./accounts";
 export * from "./voucher";
