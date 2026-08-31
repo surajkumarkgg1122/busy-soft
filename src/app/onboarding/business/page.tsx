@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useBusiness } from "../../../context/BusinessContext";
+import { INDIAN_STATES } from "../../../constants/indianStates";
 
 const BUSINESS_TYPES = ["Retail", "Wholesale", "Trading", "Manufacturing", "Services", "Water Supply", "Other"];
 const GST_TYPES = [
@@ -49,7 +50,7 @@ export default function BusinessOnboardingPage() {
     const trimmedPincode = pincode.trim();
 
     if (!trimmedName) return setError("Enter your business name.");
-    if (!trimmedState) return setError("State is required.");
+    if (!trimmedState) return setError("Select your state or union territory.");
     if (!trimmedCity) return setError("City is required.");
     if (!/^\d{6}$/.test(trimmedPincode)) return setError("Enter a valid 6-digit Indian pincode.");
     if ((gstType === "regular" || gstType === "composition") && !/^[0-9A-Z]{15}$/.test(gstin.trim().toUpperCase())) {
@@ -113,7 +114,7 @@ export default function BusinessOnboardingPage() {
               </div>
               <div className="grid gap-5 sm:grid-cols-2">
                 <div><label htmlFor="email" className="text-sm font-semibold text-[#344054]">Business email</label><input id="email" type="email" value={email} onChange={(event)=>setEmail(event.target.value)} placeholder="business@example.com" className="mt-2 h-12 w-full rounded-xl border border-[#d0d5dd] px-4 text-sm outline-none focus:border-[#465fff] focus:ring-4 focus:ring-[#465fff]/10" /></div>
-                <div><label htmlFor="state" className="text-sm font-semibold text-[#344054]">State</label><input id="state" required value={state} onChange={(event)=>setState(event.target.value)} placeholder="Bihar" className="mt-2 h-12 w-full rounded-xl border border-[#d0d5dd] px-4 text-sm outline-none focus:border-[#465fff] focus:ring-4 focus:ring-[#465fff]/10" /></div>
+                <div><label htmlFor="state" className="text-sm font-semibold text-[#344054]">State / Union Territory</label><select id="state" required value={state} onChange={(event)=>setState(event.target.value)} className="mt-2 h-12 w-full rounded-xl border border-[#d0d5dd] bg-white px-4 text-sm outline-none focus:border-[#465fff] focus:ring-4 focus:ring-[#465fff]/10"><option value="">Select state / UT</option>{INDIAN_STATES.map((item)=><option key={item.value} value={item.value}>{item.value}</option>)}</select></div>
               </div>
               <div><label htmlFor="address" className="text-sm font-semibold text-[#344054]">Address</label><input id="address" value={address} onChange={(event)=>setAddress(event.target.value)} placeholder="Street / locality / building" className="mt-2 h-12 w-full rounded-xl border border-[#d0d5dd] px-4 text-sm outline-none focus:border-[#465fff] focus:ring-4 focus:ring-[#465fff]/10" /></div>
               <div className="grid gap-5 sm:grid-cols-3">
