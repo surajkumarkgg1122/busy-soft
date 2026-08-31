@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useBusiness } from "../../../context/BusinessContext";
 
@@ -15,6 +15,7 @@ const GST_TYPES = [
 export default function BusinessOnboardingPage() {
   const router = useRouter();
   const { user, memberships, loading, createBusiness } = useBusiness();
+  const onboardingRequestKey = useRef(`business-create-${crypto.randomUUID()}`);
 
   const [name, setName] = useState("");
   const [businessType, setBusinessType] = useState("Retail");
@@ -70,6 +71,7 @@ export default function BusinessOnboardingPage() {
         gstEnabled: gstType !== "unregistered",
         registrationType: gstType,
         gstin: gstType === "regular" || gstType === "composition" ? gstin.trim().toUpperCase() : "",
+        idempotencyKey: onboardingRequestKey.current,
       });
       router.replace("/");
     } catch (createError) {
