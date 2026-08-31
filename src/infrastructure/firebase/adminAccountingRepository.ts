@@ -2,6 +2,7 @@ import "server-only";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import type { AccountingRepository, AccountingTransaction, Account, AtomicAccountingDocument, AuditEvent, FinancialYear, LedgerEntry, PartyAllocation, ReturnDocument, StockMovement, Voucher, VoucherLine } from "@/core/accounting/types";
 import { ValidationError } from "@/core/accounting/errors";
+import { normalizeWarehouseId } from "@/core/accounting/stock";
 import { getAdminServices } from "./admin";
 
 const id=(value:string,name:string)=>{if(!value||typeof value!=="string")throw new ValidationError(`${name} is required.`);return value;};
@@ -19,7 +20,12 @@ class AdminAccountingTransaction implements AccountingTransaction {
   async getVoucherByIdempotencyKey(businessId:string,financialYearId:string,key:string){if(businessId!==this.businessId)return null;const s=await this.tx.get(col(this.db,this.businessId,"vouchers").where("financialYearId","==",financialYearId).where("idempotencyKey","==",key));return s.docs[0]?.data() as Voucher|undefined??null;}
   async getAtomicDocumentByIdempotencyKey(businessId:string,financialYearId:string,key:string){if(businessId!==this.businessId)return null;const s=await this.tx.get(col(this.db,this.businessId,"accountingDocuments").where("financialYearId","==",financialYearId).where("idempotencyKey","==",key));return s.docs[0]?.data() as AtomicAccountingDocument|undefined??null;}
   async getStockMovementsForSource(sourceId:string){const s=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("sourceId","==",id(sourceId,"Stock source ID")));return s.docs.map(d=>d.data() as StockMovement);}
-  async getStockMovementsForItem(itemId:string,warehouseId?:string,throughDate?:string){let q=col(this.db,this.businessId,"stockMovements").where("itemId","==",id(itemId,"Item ID"));if(warehouseId)q=q.where("warehouseId","==",warehouseId);const s=await this.tx.get(q);return s.docs.map(d=>d.data() as StockMovement).filter(m=>!throughDate||m.date<=throughDate).sort((a,b)=>`${a.date}:${a.createdAt}:${a.id}`.localeCompare(`${b.date}:${b.createdAt}:${b.id}`));}
+  async getStockMovementsForItem(itemId:string,warehouseId?:string,throughDate?:string){
+    // Query by item first so legacy movements without warehouseId remain visible; normalize in memory.
+    const s=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("itemId","==",id(itemId,"Item ID")));
+    const wanted=warehouseId?normalizeWarehouseId(warehouseId):undefined;
+    return s.docs.map(d=>d.data() as StockMovement).filter(m=>(!wanted||normalizeWarehouseId(m.warehouseId)===wanted)&&(!throughDate||m.date<=throughDate)).sort((a,b)=>`${a.date}:${a.createdAt}:${a.id}`.localeCompare(`${b.date}:${b.createdAt}:${b.id}`));
+  }
   async getPartyAllocationsForVoucher(voucherId:string){const key=id(voucherId,"Voucher ID");const a=await this.tx.get(col(this.db,this.businessId,"partyAllocations").where("fromVoucherId","==",key));const b=await this.tx.get(col(this.db,this.businessId,"partyAllocations").where("toVoucherId","==",key));const map=new Map<string,PartyAllocation>();for(const d of [...a.docs,...b.docs])map.set(d.id,d.data() as PartyAllocation);return [...map.values()];}
   async getBusinessDocument(name:string,key:string){if(!/^[A-Za-z0-9_-]{1,64}$/.test(name))throw new ValidationError("Invalid business document collection.");const s=await this.tx.get(ref(this.db,this.businessId,name,key));return s.exists?(s.data() as Record<string,unknown>):null;}
   async saveVoucher(v:Voucher){this.tx.set(ref(this.db,this.businessId,"vouchers",v.id),v);}
