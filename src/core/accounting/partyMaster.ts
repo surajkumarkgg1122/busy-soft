@@ -44,9 +44,7 @@ export function normalizePartyInput(input: Partial<PartyMaster>, kind: PartyKind
   if (!["regular", "composition", "unregistered", "other"].includes(gst.type)) throw new ValidationError("Invalid GST registration type.");
   const gstType = gst.type;
   let gstin = gst.gstin?.trim().toUpperCase();
-  if ((gstType === "regular" || gstType === "composition") && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin ?? "")) {
-    throw new ValidationError("Enter a valid GSTIN for a registered party.");
-  }
+  if ((gstType === "regular" || gstType === "composition") && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin ?? "")) throw new ValidationError("Enter a valid GSTIN for a registered party.");
   if (gstType === "unregistered" || gstType === "other") gstin = undefined;
   const openingBalance = Number(input.openingBalance ?? 0);
   if (!Number.isSafeInteger(openingBalance) || openingBalance < 0) throw new ValidationError("Opening balance must be a non-negative integer minor-unit amount.");
@@ -78,6 +76,30 @@ export async function savePartyMaster(repo: AccountingRepository, deps: { ids: {
     const party: PartyMaster = { id: normalized.partyCode, ...normalized, createdAt: now, updatedAt: now };
     await tx.saveBusinessDocument("parties", party.id, party as unknown as Record<string, unknown>);
     await tx.saveAuditEvent({ id: deps.ids.next("audit"), businessId: party.businessId, entityType: "party", entityId: party.id, action: "PARTY_CREATED", userId, timestamp: now, after: party as unknown as Record<string, unknown> });
+    return party;
+  });
+}
+
+export async function updatePartyMaster(repo: AccountingRepository, deps: { ids: { next(prefix: string): string }; clock: { now(): string } }, input: Partial<PartyMaster>, kind: PartyKind, userId: string): Promise<PartyMaster> {
+  return repo.runInTransaction(async (tx) => {
+    const partyId = String(input.id ?? "").trim();
+    if (!partyId) throw new ValidationError("Party ID is required.");
+    const existingRaw = await tx.getBusinessDocument("parties", partyId);
+    if (!existingRaw) throw new ValidationError("Party not found.");
+    const existing = existingRaw as unknown as PartyMaster;
+    if (existing.businessId !== input.businessId || existing.kind !== kind) throw new ValidationError("Party business or type mismatch.");
+    const normalized = normalizePartyInput({ ...existing, ...input, id: partyId }, kind);
+    if (normalized.partyCode !== existing.partyCode) {
+      const codeConflict = await tx.getBusinessDocument("parties", normalized.partyCode);
+      if (codeConflict && (codeConflict as { id?: string }).id !== partyId) throw new ValidationError(`Party code already exists: ${normalized.partyCode}`);
+      throw new ValidationError("Party code cannot be changed after creation.");
+    }
+    if (normalized.ledgerAccountId !== existing.ledgerAccountId) throw new ValidationError("Party ledger account cannot be changed after creation.");
+    if (normalized.openingBalance !== existing.openingBalance || normalized.openingBalanceType !== existing.openingBalanceType) throw new ValidationError("Opening balance cannot be changed from Party Master after creation; use an accounting voucher.");
+    const now = deps.clock.now();
+    const party: PartyMaster = { id: partyId, ...normalized, createdAt: existing.createdAt, updatedAt: now };
+    await tx.saveBusinessDocument("parties", party.id, party as unknown as Record<string, unknown>);
+    await tx.saveAuditEvent({ id: deps.ids.next("audit"), businessId: party.businessId, entityType: "party", entityId: party.id, action: "PARTY_UPDATED", userId, timestamp: now, before: existingRaw, after: party as unknown as Record<string, unknown> });
     return party;
   });
 }
