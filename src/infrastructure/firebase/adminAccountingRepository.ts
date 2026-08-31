@@ -20,14 +20,20 @@ class AdminAccountingTransaction implements AccountingTransaction {
   async getVoucherByIdempotencyKey(businessId:string,financialYearId:string,key:string){if(businessId!==this.businessId)return null;const s=await this.tx.get(col(this.db,this.businessId,"vouchers").where("financialYearId","==",financialYearId).where("idempotencyKey","==",key));return s.docs[0]?.data() as Voucher|undefined??null;}
   async getAtomicDocumentByIdempotencyKey(businessId:string,financialYearId:string,key:string){if(businessId!==this.businessId)return null;const s=await this.tx.get(col(this.db,this.businessId,"accountingDocuments").where("financialYearId","==",financialYearId).where("idempotencyKey","==",key));return s.docs[0]?.data() as AtomicAccountingDocument|undefined??null;}
   async getStockMovementsForSource(sourceId:string){const s=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("sourceId","==",id(sourceId,"Stock source ID")));return s.docs.map(d=>d.data() as StockMovement);}
-  async getStockMovementsForItem(itemId:string,warehouseId?:string,throughDate?:string){
-    // Query by item first so legacy movements without warehouseId remain visible; normalize in memory.
-    const s=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("itemId","==",id(itemId,"Item ID")));
-    const wanted=warehouseId?normalizeWarehouseId(warehouseId):undefined;
-    return s.docs.map(d=>d.data() as StockMovement).filter(m=>(!wanted||normalizeWarehouseId(m.warehouseId)===wanted)&&(!throughDate||m.date<=throughDate)).sort((a,b)=>`${a.date}:${a.createdAt}:${a.id}`.localeCompare(`${b.date}:${b.createdAt}:${b.id}`));
-  }
+  async getStockMovementsForItem(itemId:string,warehouseId?:string,throughDate?:string){const s=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("itemId","==",id(itemId,"Item ID")));const wanted=warehouseId?normalizeWarehouseId(warehouseId):undefined;return s.docs.map(d=>d.data() as StockMovement).filter(m=>(!wanted||normalizeWarehouseId(m.warehouseId)===wanted)&&(!throughDate||m.date<=throughDate)).sort((a,b)=>`${a.date}:${a.createdAt}:${a.id}`.localeCompare(`${b.date}:${b.createdAt}:${b.id}`));}
   async getPartyAllocationsForVoucher(voucherId:string){const key=id(voucherId,"Voucher ID");const a=await this.tx.get(col(this.db,this.businessId,"partyAllocations").where("fromVoucherId","==",key));const b=await this.tx.get(col(this.db,this.businessId,"partyAllocations").where("toVoucherId","==",key));const map=new Map<string,PartyAllocation>();for(const d of [...a.docs,...b.docs])map.set(d.id,d.data() as PartyAllocation);return [...map.values()];}
-  async getBusinessDocument(name:string,key:string){if(!/^[A-Za-z0-9_-]{1,64}$/.test(name))throw new ValidationError("Invalid business document collection.");const s=await this.tx.get(ref(this.db,this.businessId,name,key));return s.exists?(s.data() as Record<string,unknown>):null;}
+  async getBusinessDocument(name:string,key:string){
+    if(!/^[A-Za-z0-9_-]{1,64}$/.test(name))throw new ValidationError("Invalid business document collection.");
+    const s=await this.tx.get(ref(this.db,this.businessId,name,key));
+    if(!s.exists)return null;
+    const data=(s.data()??{}) as Record<string,unknown>;
+    if(name!=="items")return data;
+    // Stock shown on an item is a cache. During accounting transactions derive it from the ledger so stale cache can never reject a valid sale/return.
+    const ms=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("itemId","==",key));
+    let stock=0;
+    for(const d of ms.docs){const m=d.data() as StockMovement;stock+=m.direction==="in"?m.quantity:-m.quantity;}
+    return {...data,stock,stockReconciliationSource:"stockMovements"};
+  }
   async saveVoucher(v:Voucher){this.tx.set(ref(this.db,this.businessId,"vouchers",v.id),v);}
   async saveVoucherLines(lines:VoucherLine[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"voucherLines",v.lineId),v);}
   async saveLedgerEntries(lines:LedgerEntry[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"ledgerEntries",v.lineId),v);}
@@ -40,8 +46,4 @@ class AdminAccountingTransaction implements AccountingTransaction {
   async allocateVoucherNumber(input:{businessId:string;financialYearId:string;voucherType:string;prefix?:string}){if(input.businessId!==this.businessId)throw new ValidationError("Business mismatch while allocating voucher number.");const sequenceId=`${input.financialYearId}_${input.voucherType}`.replace(/[^a-zA-Z0-9_-]/g,"_");const sequenceRef=ref(this.db,this.businessId,"voucherSequences",sequenceId);const snap=await this.tx.get(sequenceRef);const next=Number(snap.exists?snap.data()?.nextNumber??1:1);if(!Number.isSafeInteger(next)||next<1)throw new ValidationError("Invalid voucher sequence state.");const prefix=input.prefix??input.voucherType.toUpperCase();this.tx.set(sequenceRef,{businessId:this.businessId,financialYearId:input.financialYearId,voucherType:input.voucherType,prefix,nextNumber:next+1,updatedAt:new Date().toISOString()},{merge:true});return `${prefix}-${String(next).padStart(6,"0")}`;}
 }
 
-export function createAdminAccountingRepository(businessId:string):AccountingRepository {
-  id(businessId,"Business ID");
-  const {db}=getAdminServices();
-  return { runInTransaction:<T>(work:(tx:AccountingTransaction)=>Promise<T>)=>db.runTransaction(raw=>work(new AdminAccountingTransaction(db,raw,businessId))) };
-}
+export function createAdminAccountingRepository(businessId:string):AccountingRepository { id(businessId,"Business ID"); const {db}=getAdminServices(); return { runInTransaction:<T>(work:(tx:AccountingTransaction)=>Promise<T>)=>db.runTransaction(raw=>work(new AdminAccountingTransaction(db,raw,businessId))) }; }
