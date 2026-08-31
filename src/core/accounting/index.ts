@@ -12,6 +12,7 @@ export * from "./voucher";
 export * from "./transactions";
 export * from "./returns";
 export * from "./party";
+export * from "./partyMaster";
 export * from "./partyTransaction";
 export * from "./valuation";
 export * from "./reports";
