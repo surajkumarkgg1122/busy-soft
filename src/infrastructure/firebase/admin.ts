@@ -14,7 +14,7 @@ function credentials() {
       throw new Error(error instanceof Error ? `Invalid FIREBASE_SERVICE_ACCOUNT_JSON: ${error.message}` : "Invalid FIREBASE_SERVICE_ACCOUNT_JSON.");
     }
   }
-  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
   if (!projectId || !clientEmail || !privateKey) throw new Error("Firebase Admin credentials are not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY in .env.local.");
