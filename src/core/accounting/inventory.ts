@@ -9,8 +9,8 @@ export interface StockMovementRequest {
 }
 
 function validateTracking(input:StockMovementRequest){
-  if(input.expiryDate && !/^\\d{4}-\\d{2}-\\d{2}$/.test(input.expiryDate)) throw new ValidationError("Expiry date must use YYYY-MM-DD format.");
-  if(input.manufactureDate && !/^\\d{4}-\\d{2}-\\d{2}$/.test(input.manufactureDate)) throw new ValidationError("Manufacture date must use YYYY-MM-DD format.");
+  if(input.expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.expiryDate)) throw new ValidationError("Expiry date must use YYYY-MM-DD format.");
+  if(input.manufactureDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.manufactureDate)) throw new ValidationError("Manufacture date must use YYYY-MM-DD format.");
   if(input.manufactureDate && input.expiryDate && input.expiryDate < input.manufactureDate) throw new ValidationError("Expiry date cannot be before manufacture date.");
   if(input.batchNumber && !input.batchId) throw new ValidationError("Batch number requires a batch ID.");
   if(input.serialNumbers){
@@ -18,7 +18,7 @@ function validateTracking(input:StockMovementRequest){
     const normalized=input.serialNumbers.map(x=>x.trim()).filter(Boolean);
     if(normalized.length!==input.serialNumbers.length) throw new ValidationError("Serial numbers cannot be blank.");
     if(new Set(normalized).size!==normalized.length) throw new ValidationError("Serial numbers must be unique within a stock movement.");
-    if(input.direction==="out" && normalized.length!==input.quantity) throw new ValidationError("Serial-tracked stock quantity must equal the number of serial numbers.");
+    if(normalized.length!==input.quantity) throw new ValidationError("Serial-tracked stock quantity must equal the number of serial numbers.");
   }
   if(input.quantityInBaseUnit!==undefined && (!Number.isFinite(input.quantityInBaseUnit)||input.quantityInBaseUnit<=0)) throw new ValidationError("Base-unit quantity must be greater than zero.");
 }
