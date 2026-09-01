@@ -4,7 +4,7 @@ import type { AccountingPermission } from "@/core/accounting/authorization";
 import type { ReturnItem } from "@/core/accounting/returns";
 import { executeSaleReturn } from "@/application/core";
 import type { PostingResult, Account, AccountingRepository } from "@/core/accounting/types";
-import { createFirestoreAccountingRepository } from "@/core/accounting/firestoreRepository";
+import { createFirestoreAccountingRepository } from "@/infrastructure/firebase/firestoreAccountingRepository";
 import { ValidationError } from "@/core/accounting/errors";
 export interface SalesReturnContext { businessId:string; userId:string; financialYearId:string; idempotencyKey:string; permissions:AccountingPermission[]; }
 export interface CreateSalesReturnInput { date:string; partyId?:string; originalVoucherId:string; items:ReturnItem[]; narration?:string; taxableValue?:number; mode:"credit"|"cash"|"bank"; }
