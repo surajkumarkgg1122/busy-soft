@@ -9,10 +9,8 @@ import { postIdempotentVoucher } from "./atomic";
 import { postVoucher } from "./voucher";
 import { createStockMovement } from "./inventory";
 import { calculateTax } from "./gst";
-import { calculateOutgoingAllocations, type StockValuationMethod } from "./valuation";
 import { ValidationError } from "./errors";
 import { assertMoney, assertQuantity } from "./money";
-import { postSaleEntry } from "./saleEntry";
 
 export interface TransactionDeps {
   ids: { next(prefix: string): string };
@@ -192,10 +190,9 @@ export async function postReceipt(
 export async function postPayment(
   repo: AccountingRepository,
   base: BaseTransaction & {
-    partyId?: string;
+    partyId: string;
     amount: Money;
     mode: "cash" | "bank";
-    accountId: string;
     accountMap: AccountMap;
   },
   deps: TransactionDeps,
@@ -208,7 +205,7 @@ export async function postPayment(
     repo,
     base,
     [
-      debit(base.accountId, base.amount, { partyId: base.partyId }),
+      debit(base.accountMap.party, base.amount, { partyId: base.partyId }),
       credit(
         required(
           base.mode === "cash" ? base.accountMap.cash : base.accountMap.bank,
@@ -235,10 +232,6 @@ export async function postContra(
   if (!Number.isSafeInteger(base.amount) || base.amount <= 0) {
     throw new ValidationError("Contra amount must be positive.");
   }
-  if (base.fromAccountId === base.toAccountId) {
-    throw new ValidationError("Contra accounts must be different.");
-  }
-
   return postJournal(
     repo,
     base,
@@ -249,37 +242,26 @@ export async function postContra(
   );
 }
 
-export interface LineAmount {
+export interface OpeningBalanceInput extends BaseTransaction {
   accountId: string;
   amount: Money;
-  partyId?: string;
-  description?: string;
+  side: "debit" | "credit";
+  accountMap: { openingBalance: string };
 }
 
 export async function postOpeningBalance(
   repo: AccountingRepository,
-  base: BaseTransaction & {
-    debitLines: LineAmount[];
-    creditLines: LineAmount[];
-  },
+  input: OpeningBalanceInput,
   deps: TransactionDeps,
 ): Promise<PostingResult> {
-  const lines = [
-    ...base.debitLines.map((line) =>
-      debit(line.accountId, line.amount, {
-        partyId: line.partyId,
-        description: line.description,
-      }),
-    ),
-    ...base.creditLines.map((line) =>
-      credit(line.accountId, line.amount, {
-        partyId: line.partyId,
-        description: line.description,
-      }),
-    ),
-  ];
-
-  return postJournal(repo, base, lines, deps, "OPENING", "OB");
+  if (!Number.isSafeInteger(input.amount) || input.amount <= 0) {
+    throw new ValidationError("Opening balance amount must be positive.");
+  }
+  const clearing = required(input.accountMap.openingBalance, "opening balance");
+  const lines = input.side === "debit"
+    ? [debit(input.accountId, input.amount), credit(clearing, input.amount)]
+    : [debit(clearing, input.amount), credit(input.accountId, input.amount)];
+  return postJournal(repo, input, lines, deps, "OPENING", "OB");
 }
 
 export async function postExpense(
@@ -312,87 +294,6 @@ export async function postExpense(
     deps,
     "EXPENSE",
     "EX",
-  );
-}
-
-/**
- * Legacy-compatible sales command.
- *
- * The implementation intentionally delegates to the canonical sale entry
- * engine so there is only one sales-posting implementation in the core.
- */
-export interface SalePostingInput extends BaseTransaction {
-  customerId?: string;
-  taxableValue: Money;
-  taxRate: number;
-  intraState: boolean;
-  cessRate?: number;
-  mode: "credit" | "cash" | "bank";
-  totalCost?: Money;
-  valuationMethod?: StockValuationMethod;
-  accountMap: AccountMap;
-  itemMovements: StockCommand[];
-  idempotencyKey: string;
-  documentId?: string;
-  documentPayload?: Record<string, unknown>;
-}
-
-export async function postSale(
-  repo: AccountingRepository,
-  input: SalePostingInput,
-  deps: TransactionDeps,
-): Promise<PostingResult> {
-  validateBase(input);
-
-  const tax = calculateTax({
-    taxableValue: input.taxableValue,
-    rate: input.taxRate,
-    intraState: input.intraState,
-    cessRate: input.cessRate,
-  });
-
-  const paymentMode = input.mode;
-  const paidAmount = paymentMode === "credit" ? 0 : tax.total;
-
-  return postSaleEntry(
-    repo,
-    {
-      businessId: input.businessId,
-      financialYearId: input.financialYearId,
-      date: input.date,
-      userId: input.userId,
-      customerId: input.customerId,
-      grossValue: input.taxableValue,
-      taxRate: input.taxRate,
-      intraState: input.intraState,
-      cessRate: input.cessRate,
-      paymentMode,
-      paidAmount,
-      bankAccountId: paymentMode === "bank" ? input.accountMap.bank : undefined,
-      accountMap: {
-        party: input.accountMap.party,
-        sales: required(input.accountMap.sales, "sales"),
-        cash: input.accountMap.cash,
-        bank: input.accountMap.bank,
-        outputCgst: input.accountMap.outputCgst,
-        outputSgst: input.accountMap.outputSgst,
-        outputIgst: input.accountMap.outputIgst,
-        outputCess: input.accountMap.outputCess,
-        inventory: required(input.accountMap.inventory, "inventory"),
-        cogs: required(input.accountMap.cogs, "COGS"),
-      },
-      itemMovements: input.itemMovements.map((item) => ({
-        itemId: item.itemId,
-        quantity: item.quantity,
-        warehouseId: item.warehouseId,
-      })),
-      valuationMethod: input.valuationMethod,
-      narration: input.narration,
-      idempotencyKey: input.idempotencyKey,
-      documentId: input.documentId,
-      documentPayload: input.documentPayload,
-    },
-    deps,
   );
 }
 
@@ -454,6 +355,7 @@ export async function postPurchase(
           narration: input.narration,
           createdBy: input.userId,
           referenceType: "purchase",
+          referenceId: input.documentId ?? input.idempotencyKey,
           lines: [],
           idempotencyKey: input.idempotencyKey,
         },
@@ -486,18 +388,10 @@ export async function postPurchase(
       debit(inventoryAccount, stockTotal),
     ];
 
-    if (tax.cgst) {
-      lines.push(debit(required(input.accountMap.inputCgst, "input CGST"), tax.cgst));
-    }
-    if (tax.sgst) {
-      lines.push(debit(required(input.accountMap.inputSgst, "input SGST"), tax.sgst));
-    }
-    if (tax.igst) {
-      lines.push(debit(required(input.accountMap.inputIgst, "input IGST"), tax.igst));
-    }
-    if (tax.cess) {
-      lines.push(debit(required(input.accountMap.inputCess, "input cess"), tax.cess));
-    }
+    if (tax.cgst) lines.push(debit(required(input.accountMap.inputCgst, "input CGST"), tax.cgst));
+    if (tax.sgst) lines.push(debit(required(input.accountMap.inputSgst, "input SGST"), tax.sgst));
+    if (tax.igst) lines.push(debit(required(input.accountMap.inputIgst, "input IGST"), tax.igst));
+    if (tax.cess) lines.push(debit(required(input.accountMap.inputCess, "input cess"), tax.cess));
 
     const result = await postIdempotentVoucher(
       tx,
