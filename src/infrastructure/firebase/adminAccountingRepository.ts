@@ -3,24 +3,12 @@ import type { Firestore, Transaction } from "firebase-admin/firestore";
 import type { AccountingRepository, AccountingTransaction, Account, AtomicAccountingDocument, AuditEvent, FinancialYear, LedgerEntry, PartyAllocation, ReturnDocument, StockMovement, Voucher, VoucherLine } from "@/core/accounting/types";
 import { ValidationError } from "@/core/accounting/errors";
 import { normalizeWarehouseId } from "@/core/accounting/stock";
+import { firestoreSafe } from "@/core/accounting/firestoreSafe";
 import { getAdminServices } from "./admin";
 
 const id=(value:string,name:string)=>{if(!value||typeof value!=="string")throw new ValidationError(`${name} is required.`);return value;};
 const ref=(db:Firestore,businessId:string,name:string,key:string)=>db.collection("businesses").doc(id(businessId,"Business ID")).collection(id(name,"Collection")).doc(id(key,`Document ID for ${name}`));
 const col=(db:Firestore,businessId:string,name:string)=>db.collection("businesses").doc(id(businessId,"Business ID")).collection(id(name,"Collection"));
-
-/** Firestore rejects undefined anywhere in a document. Keep null (intentional absence),
- * remove undefined recursively, and preserve arrays without introducing undefined values. */
-function firestoreSafe<T>(value:T):T{
-  if(Array.isArray(value))return value.filter((v)=>v!==undefined).map((v)=>firestoreSafe(v)) as T;
-  if(value!==null&&typeof value==="object"){
-    const out:Record<string,unknown>={};
-    for(const [key,v] of Object.entries(value as Record<string,unknown>))if(v!==undefined)out[key]=firestoreSafe(v);
-    return out as T;
-  }
-  return value;
-}
-
 const toAccount=(data:Record<string,unknown>,accountId:string):Account=>({id:accountId,businessId:String(data.businessId??""),code:String(data.code??""),name:String(data.name??""),type:data.type as Account["type"],parentId:(data.parentId as string|null|undefined)??null,systemAccount:Boolean(data.systemAccount),active:data.active!==false,openingDebit:Number(data.openingDebit??0),openingCredit:Number(data.openingCredit??0),createdAt:String(data.createdAt??""),updatedAt:String(data.updatedAt??"")});
 
 class AdminAccountingTransaction implements AccountingTransaction {
@@ -35,17 +23,7 @@ class AdminAccountingTransaction implements AccountingTransaction {
   async getStockMovementsForSource(sourceId:string){const s=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("sourceId","==",id(sourceId,"Stock source ID")));return s.docs.map(d=>d.data() as StockMovement);}
   async getStockMovementsForItem(itemId:string,warehouseId?:string,throughDate?:string){const s=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("itemId","==",id(itemId,"Item ID")));const wanted=warehouseId?normalizeWarehouseId(warehouseId):undefined;return s.docs.map(d=>d.data() as StockMovement).filter(m=>(!wanted||normalizeWarehouseId(m.warehouseId)===wanted)&&(!throughDate||m.date<=throughDate)).sort((a,b)=>`${a.date}:${a.createdAt}:${a.id}`.localeCompare(`${b.date}:${b.createdAt}:${b.id}`));}
   async getPartyAllocationsForVoucher(voucherId:string){const key=id(voucherId,"Voucher ID");const a=await this.tx.get(col(this.db,this.businessId,"partyAllocations").where("fromVoucherId","==",key));const b=await this.tx.get(col(this.db,this.businessId,"partyAllocations").where("toVoucherId","==",key));const map=new Map<string,PartyAllocation>();for(const d of [...a.docs,...b.docs])map.set(d.id,d.data() as PartyAllocation);return [...map.values()];}
-  async getBusinessDocument(name:string,key:string){
-    if(!/^[A-Za-z0-9_-]{1,64}$/.test(name))throw new ValidationError("Invalid business document collection.");
-    const s=await this.tx.get(ref(this.db,this.businessId,name,key));
-    if(!s.exists)return null;
-    const data=(s.data()??{}) as Record<string,unknown>;
-    if(name!=="items")return data;
-    const ms=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("itemId","==",key));
-    let stock=0;
-    for(const d of ms.docs){const m=d.data() as StockMovement;stock+=m.direction==="in"?m.quantity:-m.quantity;}
-    return {...data,stock,stockReconciliationSource:"stockMovements"};
-  }
+  async getBusinessDocument(name:string,key:string){if(!/^[A-Za-z0-9_-]{1,64}$/.test(name))throw new ValidationError("Invalid business document collection.");const s=await this.tx.get(ref(this.db,this.businessId,name,key));if(!s.exists)return null;const data=(s.data()??{}) as Record<string,unknown>;if(name!=="items")return data;const ms=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("itemId","==",key));let stock=0;for(const d of ms.docs){const m=d.data() as StockMovement;stock+=m.direction==="in"?m.quantity:-m.quantity;}return{...data,stock,stockReconciliationSource:"stockMovements"};}
   async saveVoucher(v:Voucher){this.tx.set(ref(this.db,this.businessId,"vouchers",v.id),firestoreSafe(v));}
   async saveVoucherLines(lines:VoucherLine[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"voucherLines",v.lineId),firestoreSafe(v));}
   async saveLedgerEntries(lines:LedgerEntry[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"ledgerEntries",v.lineId),firestoreSafe(v));}
@@ -57,5 +35,4 @@ class AdminAccountingTransaction implements AccountingTransaction {
   async saveAuditEvent(v:AuditEvent){this.tx.set(ref(this.db,this.businessId,"auditLogs",v.id),firestoreSafe(v));}
   async allocateVoucherNumber(input:{businessId:string;financialYearId:string;voucherType:string;prefix?:string}){if(input.businessId!==this.businessId)throw new ValidationError("Business mismatch while allocating voucher number.");const sequenceId=`${input.financialYearId}_${input.voucherType}`.replace(/[^a-zA-Z0-9_-]/g,"_");const sequenceRef=ref(this.db,this.businessId,"voucherSequences",sequenceId);const snap=await this.tx.get(sequenceRef);const next=Number(snap.exists?snap.data()?.nextNumber??1:1);if(!Number.isSafeInteger(next)||next<1)throw new ValidationError("Invalid voucher sequence state.");const prefix=input.prefix??input.voucherType.toUpperCase();this.tx.set(sequenceRef,firestoreSafe({businessId:this.businessId,financialYearId:input.financialYearId,voucherType:input.voucherType,prefix,nextNumber:next+1,updatedAt:new Date().toISOString()}),{merge:true});return `${prefix}-${String(next).padStart(6,"0")}`;}
 }
-
 export function createAdminAccountingRepository(businessId:string):AccountingRepository { id(businessId,"Business ID"); const {db}=getAdminServices(); return { runInTransaction:<T>(work:(tx:AccountingTransaction)=>Promise<T>)=>db.runTransaction(raw=>work(new AdminAccountingTransaction(db,raw,businessId))) }; }
