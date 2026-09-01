@@ -1,0 +1,215 @@
+import type { Money, StockDirection, StockMovement } from "./types";
+import { ValidationError } from "./errors";
+
+export interface StockScope {
+  businessId: string;
+  financialYearId: string;
+  itemId: string;
+  warehouseId: string;
+}
+
+export interface StockBalance extends StockScope {
+  quantity: number;
+  value: Money;
+  movementCount: number;
+  asOf?: string;
+}
+
+export interface StockTrackingFields {
+  batchId?: string;
+  batchNumber?: string;
+  manufactureDate?: string;
+  expiryDate?: string;
+  serialNumbers?: string[];
+  unitId?: string;
+  quantityInBaseUnit?: number;
+}
+
+export interface StockAdjustmentInput extends StockScope, StockTrackingFields {
+  date: string;
+  quantityDelta: number;
+  unitCost: Money;
+  sourceId: string;
+  createdBy: string;
+}
+
+export const DEFAULT_WAREHOUSE_ID = "default";
+
+export function normalizeWarehouseId(v?: string | null): string {
+  return v?.trim() || DEFAULT_WAREHOUSE_ID;
+}
+
+function signed(m: StockMovement): number {
+  return m.direction === "in" ? m.quantity : -m.quantity;
+}
+
+export function balanceFor(
+  ms: readonly StockMovement[],
+  scope: Omit<StockScope, "warehouseId"> & { warehouseId?: string },
+  asOf?: string,
+): StockBalance {
+  const warehouseId = normalizeWarehouseId(scope.warehouseId);
+  const rows = ms.filter(
+    (m) =>
+      m.businessId === scope.businessId &&
+      m.financialYearId === scope.financialYearId &&
+      m.itemId === scope.itemId &&
+      normalizeWarehouseId(m.warehouseId) === warehouseId &&
+      (!asOf || m.date <= asOf),
+  );
+
+  let quantity = 0;
+  let value = 0;
+  for (const m of rows) {
+    quantity += signed(m);
+    value += m.direction === "in" ? m.value : -m.value;
+  }
+
+  if (!Number.isFinite(quantity) || !Number.isSafeInteger(value)) {
+    throw new ValidationError("Stock balance exceeds safe numeric range.");
+  }
+
+  return {
+    ...scope,
+    warehouseId,
+    quantity,
+    value,
+    movementCount: rows.length,
+    ...(asOf ? { asOf } : {}),
+  };
+}
+
+export function assertAvailableStock(
+  ms: readonly StockMovement[],
+  scope: Omit<StockScope, "warehouseId"> & { warehouseId?: string },
+  quantity: number,
+  asOf?: string,
+) {
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new ValidationError("Stock quantity must be greater than zero.");
+  }
+  const b = balanceFor(ms, scope, asOf);
+  if (b.quantity < quantity) {
+    throw new ValidationError(
+      `Insufficient stock for item ${scope.itemId} in warehouse ${b.warehouseId}. Available ${b.quantity}, required ${quantity}.`,
+    );
+  }
+  return b;
+}
+
+export function adjustmentMovement(
+  input: StockAdjustmentInput,
+  id: string,
+  createdAt: string,
+): StockMovement {
+  if (!Number.isFinite(input.quantityDelta) || input.quantityDelta === 0) {
+    throw new ValidationError("Stock adjustment cannot be zero.");
+  }
+  if (!Number.isSafeInteger(input.unitCost) || input.unitCost < 0) {
+    throw new ValidationError("Adjustment unit cost must be a non-negative integer.");
+  }
+
+  const quantity = Math.abs(input.quantityDelta);
+  const direction: StockDirection = input.quantityDelta > 0 ? "in" : "out";
+
+  return {
+    id,
+    businessId: input.businessId,
+    financialYearId: input.financialYearId,
+    date: input.date,
+    itemId: input.itemId,
+    warehouseId: normalizeWarehouseId(input.warehouseId),
+    direction,
+    quantity,
+    unitCost: input.unitCost,
+    value: Math.round(quantity * input.unitCost),
+    sourceType: "adjustment",
+    sourceId: input.sourceId,
+    createdBy: input.createdBy,
+    createdAt,
+    ...(input.batchId ? { batchId: input.batchId } : {}),
+    ...(input.batchNumber ? { batchNumber: input.batchNumber } : {}),
+    ...(input.manufactureDate ? { manufactureDate: input.manufactureDate } : {}),
+    ...(input.expiryDate ? { expiryDate: input.expiryDate } : {}),
+    ...(input.serialNumbers ? { serialNumbers: [...input.serialNumbers] } : {}),
+    ...(input.unitId ? { unitId: input.unitId } : {}),
+    ...(input.quantityInBaseUnit !== undefined
+      ? { quantityInBaseUnit: input.quantityInBaseUnit }
+      : {}),
+  };
+}
+
+export function reconcileCachedStock(
+  current: Record<string, unknown>,
+  balance: StockBalance,
+  now: string,
+) {
+  return {
+    ...current,
+    stock: balance.quantity,
+    stockValue: balance.value,
+    stockWarehouseId: balance.warehouseId,
+    stockReconciledAt: now,
+    stockReconciliationSource: "stockMovements",
+  };
+}
+
+export interface StockLedgerRow {
+  date: string;
+  movementId: string;
+  sourceType: StockMovement["sourceType"];
+  sourceId: string;
+  direction: StockDirection;
+  quantity: number;
+  unitCost: Money;
+  value: Money;
+  runningQuantity: number;
+  runningValue: Money;
+  warehouseId: string;
+}
+
+export function buildStockLedger(
+  ms: readonly StockMovement[],
+  scope: Omit<StockScope, "warehouseId"> & { warehouseId?: string },
+  throughDate?: string,
+): StockLedgerRow[] {
+  const warehouseId = normalizeWarehouseId(scope.warehouseId);
+  const rows = ms
+    .filter(
+      (m) =>
+        m.businessId === scope.businessId &&
+        m.financialYearId === scope.financialYearId &&
+        m.itemId === scope.itemId &&
+        normalizeWarehouseId(m.warehouseId) === warehouseId &&
+        (!throughDate || m.date <= throughDate),
+    )
+    .sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) ||
+        a.createdAt.localeCompare(b.createdAt) ||
+        a.id.localeCompare(b.id),
+    );
+
+  let quantity = 0;
+  let value = 0;
+  return rows.map((m) => {
+    quantity += signed(m);
+    value += m.direction === "in" ? m.value : -m.value;
+    if (!Number.isFinite(quantity) || !Number.isSafeInteger(value)) {
+      throw new ValidationError("Stock ledger exceeds safe numeric range.");
+    }
+    return {
+      date: m.date,
+      movementId: m.id,
+      sourceType: m.sourceType,
+      sourceId: m.sourceId,
+      direction: m.direction,
+      quantity: m.quantity,
+      unitCost: m.unitCost,
+      value: m.value,
+      runningQuantity: quantity,
+      runningValue: value,
+      warehouseId,
+    };
+  });
+}
