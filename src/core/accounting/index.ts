@@ -21,7 +21,6 @@ export * from "./reconciliation";
 export * from "./atomic";
 export * from "./authorization";
 export * from "./trustedCommands";
-export * from "./firestoreRepository";
 export * from "./inMemoryRepository";
 export * from "./selfTest";
 export * from "./stockSelfTest";
