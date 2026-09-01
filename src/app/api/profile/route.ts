@@ -1,0 +1,8 @@
+import { NextResponse } from "next/server";
+import { Timestamp } from "firebase-admin/firestore";
+import { getAdminServices } from "@/infrastructure/firebase/admin";
+
+export const runtime="nodejs";
+function errorResponse(message:string,status=400){return NextResponse.json({success:false,error:message},{status});}
+async function authenticate(request:Request){const{auth,db}=getAdminServices();const header=request.headers.get("authorization")||"";if(!header.startsWith("Bearer "))throw new Error("Authentication is required.");const token=await auth.verifyIdToken(header.slice(7));return{db,token};}
+export async function GET(request:Request){try{const{db,token}=await authenticate(request);const ref=db.collection("users").doc(token.uid);const snap=await ref.get();const now=Timestamp.now();if(!snap.exists){const profile={uid:token.uid,name:token.name||token.email?.split("@")[0]||"User",email:token.email||"",phone:"",photoURL:token.picture||null,status:"active",createdAt:now,updatedAt:now,lastLoginAt:now};await ref.create(profile);return NextResponse.json({success:true,created:true,user:profile});}await ref.set({updatedAt:now,lastLoginAt:now,email:token.email||snap.data()?.email||"",name:token.name||snap.data()?.name||token.email?.split("@")[0]||"User",photoURL:token.picture||snap.data()?.photoURL||null},{merge:true});return NextResponse.json({success:true,created:false,user:(await ref.get()).data()});}catch(error){const message=error instanceof Error?error.message:"Could not initialize user profile.";return errorResponse(message,/authentication|token|credential/i.test(message)?401:500);}}
