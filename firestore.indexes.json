@@ -5,7 +5,7 @@
       "queryScope": "COLLECTION_GROUP",
       "fields": [
         { "fieldPath": "locked", "order": "ASCENDING" },
-        { "fieldPath": "startDate", "order": "ASCENDING" }
+        { "fieldPath": "startDate", "order": "DESCENDING" }
       ]
     }
   ],
