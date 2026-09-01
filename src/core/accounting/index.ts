@@ -12,6 +12,7 @@ export * from "./accounts";
 export * from "./voucher";
 export * from "./transactions";
 export * from "./cashBank";
+export * from "./voucherReversal";
 export * from "./returns";
 export * from "./party";
 export * from "./partyMaster";
