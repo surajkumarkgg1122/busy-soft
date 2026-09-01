@@ -8,6 +8,19 @@ import { getAdminServices } from "./admin";
 const id=(value:string,name:string)=>{if(!value||typeof value!=="string")throw new ValidationError(`${name} is required.`);return value;};
 const ref=(db:Firestore,businessId:string,name:string,key:string)=>db.collection("businesses").doc(id(businessId,"Business ID")).collection(id(name,"Collection")).doc(id(key,`Document ID for ${name}`));
 const col=(db:Firestore,businessId:string,name:string)=>db.collection("businesses").doc(id(businessId,"Business ID")).collection(id(name,"Collection"));
+
+/** Firestore rejects undefined anywhere in a document. Keep null (intentional absence),
+ * remove undefined recursively, and preserve arrays without introducing undefined values. */
+function firestoreSafe<T>(value:T):T{
+  if(Array.isArray(value))return value.filter((v)=>v!==undefined).map((v)=>firestoreSafe(v)) as T;
+  if(value!==null&&typeof value==="object"){
+    const out:Record<string,unknown>={};
+    for(const [key,v] of Object.entries(value as Record<string,unknown>))if(v!==undefined)out[key]=firestoreSafe(v);
+    return out as T;
+  }
+  return value;
+}
+
 const toAccount=(data:Record<string,unknown>,accountId:string):Account=>({id:accountId,businessId:String(data.businessId??""),code:String(data.code??""),name:String(data.name??""),type:data.type as Account["type"],parentId:(data.parentId as string|null|undefined)??null,systemAccount:Boolean(data.systemAccount),active:data.active!==false,openingDebit:Number(data.openingDebit??0),openingCredit:Number(data.openingCredit??0),createdAt:String(data.createdAt??""),updatedAt:String(data.updatedAt??"")});
 
 class AdminAccountingTransaction implements AccountingTransaction {
@@ -28,22 +41,21 @@ class AdminAccountingTransaction implements AccountingTransaction {
     if(!s.exists)return null;
     const data=(s.data()??{}) as Record<string,unknown>;
     if(name!=="items")return data;
-    // Stock shown on an item is a cache. During accounting transactions derive it from the ledger so stale cache can never reject a valid sale/return.
     const ms=await this.tx.get(col(this.db,this.businessId,"stockMovements").where("itemId","==",key));
     let stock=0;
     for(const d of ms.docs){const m=d.data() as StockMovement;stock+=m.direction==="in"?m.quantity:-m.quantity;}
     return {...data,stock,stockReconciliationSource:"stockMovements"};
   }
-  async saveVoucher(v:Voucher){this.tx.set(ref(this.db,this.businessId,"vouchers",v.id),v);}
-  async saveVoucherLines(lines:VoucherLine[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"voucherLines",v.lineId),v);}
-  async saveLedgerEntries(lines:LedgerEntry[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"ledgerEntries",v.lineId),v);}
-  async saveStockMovements(lines:StockMovement[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"stockMovements",v.id),v);}
-  async savePartyAllocations(lines:PartyAllocation[]){for(const v of lines){if(v.businessId!==this.businessId)throw new ValidationError("Business mismatch in party allocation.");this.tx.set(ref(this.db,this.businessId,"partyAllocations",v.id),v);}}
-  async saveReturnDocument(v:ReturnDocument){if(v.businessId!==this.businessId)throw new ValidationError("Business mismatch in return document.");this.tx.set(ref(this.db,this.businessId,"returnDocuments",v.id),v);}
-  async saveAtomicDocument(v:AtomicAccountingDocument){if(v.businessId!==this.businessId)throw new ValidationError("Business mismatch in accounting document.");this.tx.set(ref(this.db,this.businessId,"accountingDocuments",v.id),v);}
-  async saveBusinessDocument(name:string,key:string,data:Record<string,unknown>){if(!/^[A-Za-z0-9_-]{1,64}$/.test(name)||!key)throw new ValidationError("Invalid business document reference.");if(String(data.businessId??"")!==this.businessId)throw new ValidationError("Business document business mismatch.");this.tx.set(ref(this.db,this.businessId,name,key),data);}
-  async saveAuditEvent(v:AuditEvent){this.tx.set(ref(this.db,this.businessId,"auditLogs",v.id),v);}
-  async allocateVoucherNumber(input:{businessId:string;financialYearId:string;voucherType:string;prefix?:string}){if(input.businessId!==this.businessId)throw new ValidationError("Business mismatch while allocating voucher number.");const sequenceId=`${input.financialYearId}_${input.voucherType}`.replace(/[^a-zA-Z0-9_-]/g,"_");const sequenceRef=ref(this.db,this.businessId,"voucherSequences",sequenceId);const snap=await this.tx.get(sequenceRef);const next=Number(snap.exists?snap.data()?.nextNumber??1:1);if(!Number.isSafeInteger(next)||next<1)throw new ValidationError("Invalid voucher sequence state.");const prefix=input.prefix??input.voucherType.toUpperCase();this.tx.set(sequenceRef,{businessId:this.businessId,financialYearId:input.financialYearId,voucherType:input.voucherType,prefix,nextNumber:next+1,updatedAt:new Date().toISOString()},{merge:true});return `${prefix}-${String(next).padStart(6,"0")}`;}
+  async saveVoucher(v:Voucher){this.tx.set(ref(this.db,this.businessId,"vouchers",v.id),firestoreSafe(v));}
+  async saveVoucherLines(lines:VoucherLine[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"voucherLines",v.lineId),firestoreSafe(v));}
+  async saveLedgerEntries(lines:LedgerEntry[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"ledgerEntries",v.lineId),firestoreSafe(v));}
+  async saveStockMovements(lines:StockMovement[]){for(const v of lines)this.tx.set(ref(this.db,this.businessId,"stockMovements",v.id),firestoreSafe(v));}
+  async savePartyAllocations(lines:PartyAllocation[]){for(const v of lines){if(v.businessId!==this.businessId)throw new ValidationError("Business mismatch in party allocation.");this.tx.set(ref(this.db,this.businessId,"partyAllocations",v.id),firestoreSafe(v));}}
+  async saveReturnDocument(v:ReturnDocument){if(v.businessId!==this.businessId)throw new ValidationError("Business mismatch in return document.");this.tx.set(ref(this.db,this.businessId,"returnDocuments",v.id),firestoreSafe(v));}
+  async saveAtomicDocument(v:AtomicAccountingDocument){if(v.businessId!==this.businessId)throw new ValidationError("Business mismatch in accounting document.");this.tx.set(ref(this.db,this.businessId,"accountingDocuments",v.id),firestoreSafe(v));}
+  async saveBusinessDocument(name:string,key:string,data:Record<string,unknown>){if(!/^[A-Za-z0-9_-]{1,64}$/.test(name)||!key)throw new ValidationError("Invalid business document reference.");if(String(data.businessId??"")!==this.businessId)throw new ValidationError("Business document business mismatch.");this.tx.set(ref(this.db,this.businessId,name,key),firestoreSafe(data));}
+  async saveAuditEvent(v:AuditEvent){this.tx.set(ref(this.db,this.businessId,"auditLogs",v.id),firestoreSafe(v));}
+  async allocateVoucherNumber(input:{businessId:string;financialYearId:string;voucherType:string;prefix?:string}){if(input.businessId!==this.businessId)throw new ValidationError("Business mismatch while allocating voucher number.");const sequenceId=`${input.financialYearId}_${input.voucherType}`.replace(/[^a-zA-Z0-9_-]/g,"_");const sequenceRef=ref(this.db,this.businessId,"voucherSequences",sequenceId);const snap=await this.tx.get(sequenceRef);const next=Number(snap.exists?snap.data()?.nextNumber??1:1);if(!Number.isSafeInteger(next)||next<1)throw new ValidationError("Invalid voucher sequence state.");const prefix=input.prefix??input.voucherType.toUpperCase();this.tx.set(sequenceRef,firestoreSafe({businessId:this.businessId,financialYearId:input.financialYearId,voucherType:input.voucherType,prefix,nextNumber:next+1,updatedAt:new Date().toISOString()}),{merge:true});return `${prefix}-${String(next).padStart(6,"0")}`;}
 }
 
 export function createAdminAccountingRepository(businessId:string):AccountingRepository { id(businessId,"Business ID"); const {db}=getAdminServices(); return { runInTransaction:<T>(work:(tx:AccountingTransaction)=>Promise<T>)=>db.runTransaction(raw=>work(new AdminAccountingTransaction(db,raw,businessId))) }; }
