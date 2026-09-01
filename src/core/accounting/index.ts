@@ -3,6 +3,7 @@ export * from "./errors";
 export * from "./ledger";
 export * from "./gst";
 export * from "./inventory";
+export * from "./inventoryTracking";
 export * from "./stock";
 export * from "./stockOperations";
 export * from "./openingStock";
