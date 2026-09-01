@@ -7,7 +7,7 @@ import { ValidationError } from "./errors";
 import { assertMoney, assertQuantity } from "./money";
 import type { TransactionDeps } from "./transactions";
 
-export interface SaleEntryInput { businessId:string; financialYearId:string; date:string; userId:string; customerId?:string; grossValue:Money; discountPercent?:number; discountAmount?:Money; taxRate:number; intraState:boolean; cessRate?:number; paymentMode:"cash"|"bank"|"credit"; paidAmount?:Money; bankAccountId?:string; accountMap:{party:string;cash?:string;bank?:string;sales:string;outputCgst?:string;outputSgst?:string;outputIgst?:string;outputCess?:string;inventory:string;cogs:string}; itemMovements:Array<{itemId:string;quantity:number;warehouseId?:string}>; valuationMethod?:StockValuationMethod; narration?:string; idempotencyKey:string; documentId?:string; documentPayload?:Record<string,unknown>; }
+export interface SaleEntryInput { businessId:string; financialYearId:string; date:string; userId:string; customerId?:string; grossValue:Money; discountPercent?:number; discountAmount?:Money; taxRate:number; intraState:boolean; cessRate?:number; paymentMode:"cash"|"bank"|"credit"; paidAmount?:Money; bankAccountId?:string; accountMap:{party:string;cash?:string;bank?:string;sales:string;outputCgst?:string;outputSgst?:string;outputIgst?:string;outputCess?:string;inventory:string;cogs:string}; itemMovements:Array<{itemId:string;quantity:number;warehouseId?:string;batchId?:string;batchNumber?:string;manufactureDate?:string;expiryDate?:string;serialNumbers?:string[];unitId?:string;quantityInBaseUnit?:number}>; valuationMethod?:StockValuationMethod; narration?:string; idempotencyKey:string; documentId?:string; documentPayload?:Record<string,unknown>; }
 
 const debit=(accountId:string,amount:Money,extra:Partial<VoucherLineInput>={})=>({accountId,debit:amount,credit:0,...extra});
 const credit=(accountId:string,amount:Money,extra:Partial<VoucherLineInput>={})=>({accountId,debit:0,credit:amount,...extra});
@@ -46,7 +46,8 @@ export async function postSaleEntry(repo:AccountingRepository,input:SaleEntryInp
   for(const item of input.itemMovements){
     if(!item.itemId)throw new ValidationError("Item is required.");
     assertQuantity(item.quantity);
-    const k=`${item.itemId}:${item.warehouseId??""}`;
+    if(item.serialNumbers&&item.serialNumbers.length!==item.quantity)throw new ValidationError("Serial count must equal sale quantity.");
+    const k=`${item.itemId}:${item.warehouseId??""}:${item.batchId??""}`;
     if(seen.has(k))throw new ValidationError(`Duplicate stock line: ${k}`);
     seen.add(k);
   }
@@ -82,7 +83,7 @@ export async function postSaleEntry(repo:AccountingRepository,input:SaleEntryInp
     if(totalCost>0)lines.push(debit(input.accountMap.cogs,totalCost),credit(input.accountMap.inventory,totalCost));
 
     const result=await postIdempotentVoucher(tx,{businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"SALE",prefix:"SI",date:input.date,narration:input.narration,createdBy:input.userId,referenceType:"sale",referenceId:input.documentId??input.idempotencyKey,lines,idempotencyKey:input.idempotencyKey},deps);
-    const movements=valued.flatMap(v=>v.allocations.map(a=>createStockMovement({businessId:input.businessId,financialYearId:input.financialYearId,date:input.date,itemId:v.item.itemId,warehouseId:v.item.warehouseId,direction:"out",quantity:a.quantity,unitCost:a.unitCost,value:a.value,sourceType:"sale",sourceId:result.voucher.id,createdBy:input.userId},deps.ids,deps.clock.now())));
+    const movements=valued.flatMap(v=>v.allocations.map(a=>createStockMovement({businessId:input.businessId,financialYearId:input.financialYearId,date:input.date,itemId:v.item.itemId,warehouseId:v.item.warehouseId,direction:"out",quantity:a.quantity,unitCost:a.unitCost,value:a.value,sourceType:"sale",sourceId:result.voucher.id,createdBy:input.userId,batchId:v.item.batchId,batchNumber:v.item.batchNumber,manufactureDate:v.item.manufactureDate,expiryDate:v.item.expiryDate,serialNumbers:v.item.serialNumbers,unitId:v.item.unitId,quantityInBaseUnit:v.item.quantityInBaseUnit},deps.ids,deps.clock.now())));
     await tx.saveStockMovements(movements);
 
     const payload={
