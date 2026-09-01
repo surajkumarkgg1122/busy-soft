@@ -1,34 +1,25 @@
 import { ValidationError } from "./errors";
 import { assertQuantity, assertMoney } from "./money";
+import type { Money, StockMovement } from "./types";
+import { balanceFor, normalizeWarehouseId } from "./stock";
+import { calculateOutgoingCost, type StockValuationMethod } from "./valuation";
 
 export type StockTrackingMode = "none" | "batch" | "serial";
-
-export interface StockTrackingInput {
-  mode: StockTrackingMode;
-  quantity: number;
-  batchNo?: string;
-  serialNumbers?: string[];
-  expiryDate?: string;
-  unitCost?: number;
-}
-
+export interface StockTrackingInput { mode: StockTrackingMode; quantity:number; batchNo?:string; serialNumbers?:string[]; expiryDate?:string; unitCost?:number; }
 export function validateStockTracking(input:StockTrackingInput):void {
-  assertQuantity(input.quantity);
-  if(input.unitCost!==undefined)assertMoney(input.unitCost,"Unit cost");
+  assertQuantity(input.quantity); if(input.unitCost!==undefined)assertMoney(input.unitCost,"Unit cost");
   if(input.mode==="batch"&&!input.batchNo?.trim())throw new ValidationError("Batch-tracked stock requires a batch number.");
   if(input.mode!=="serial"&&input.serialNumbers?.length)throw new ValidationError("Serial numbers are allowed only for serial-tracked stock.");
-  if(input.mode==="serial"){
-    if(!input.serialNumbers?.length)throw new ValidationError("Serial-tracked stock requires serial numbers.");
-    if(input.serialNumbers.length!==Math.floor(input.quantity))throw new ValidationError("Serial number count must equal the stock quantity.");
-    const normalized=input.serialNumbers.map(v=>v.trim()).filter(Boolean);
-    if(normalized.length!==input.serialNumbers.length)throw new ValidationError("Serial numbers cannot be empty.");
-    if(new Set(normalized).size!==normalized.length)throw new ValidationError("Duplicate serial numbers are not allowed.");
-  }
+  if(input.mode==="serial"){if(!input.serialNumbers?.length)throw new ValidationError("Serial-tracked stock requires serial numbers.");if(input.serialNumbers.length!==Math.floor(input.quantity))throw new ValidationError("Serial number count must equal the stock quantity.");const normalized=input.serialNumbers.map(v=>v.trim()).filter(Boolean);if(normalized.length!==input.serialNumbers.length)throw new ValidationError("Serial numbers cannot be empty.");if(new Set(normalized).size!==normalized.length)throw new ValidationError("Duplicate serial numbers are not allowed.");}
   if(input.expiryDate!==undefined&&!/^\d{4}-\d{2}-\d{2}$/.test(input.expiryDate))throw new ValidationError("Expiry date must be YYYY-MM-DD.");
 }
+export function assertSaleQuantityAvailable(available:number,requested:number):void {assertQuantity(requested);if(!Number.isFinite(available)||available<0)throw new ValidationError("Available stock is invalid.");if(requested>available)throw new ValidationError(`Insufficient stock. Available: ${available}. Requested: ${requested}.`);}
 
-export function assertSaleQuantityAvailable(available:number,requested:number):void {
-  assertQuantity(requested);
-  if(!Number.isFinite(available)||available<0)throw new ValidationError("Available stock is invalid.");
-  if(requested>available)throw new ValidationError(`Insufficient stock. Available: ${available}. Requested: ${requested}.`);
-}
+export interface SerialState { serial:string; status:"available"|"issued"; lastMovementId:string; }
+export function assertNotExpired(expiryDate:string|undefined,transactionDate:string,allowExpired=false){if(!expiryDate)return;if(!/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)||!/^\d{4}-\d{2}-\d{2}$/.test(transactionDate))throw new ValidationError("Dates must use YYYY-MM-DD format.");if(!allowExpired&&expiryDate<transactionDate)throw new ValidationError(`Expired stock cannot be issued after ${expiryDate}.`);}
+export function serialStates(movements:readonly StockMovement[]):Map<string,SerialState>{const state=new Map<string,SerialState>();const ordered=[...movements].sort((a,b)=>`${a.date}:${a.createdAt}:${a.id}`.localeCompare(`${b.date}:${b.createdAt}:${b.id}`));for(const m of ordered){for(const serial of m.serialNumbers||[]){const existing=state.get(serial);if(m.direction==="in"){if(existing?.status==="available")throw new ValidationError(`Serial number ${serial} was received while already available.`);state.set(serial,{serial,status:"available",lastMovementId:m.id});}else{if(!existing||existing.status!=="available")throw new ValidationError(`Serial number ${serial} is not available for issue.`);state.set(serial,{serial,status:"issued",lastMovementId:m.id});}}}return state;}
+export function assertSerialsAvailable(movements:readonly StockMovement[],serials:readonly string[],quantity:number){if(!Number.isInteger(quantity)||quantity<=0)throw new ValidationError("Serial-tracked quantity must be a positive integer.");const normalized=serials.map(s=>s.trim());if(normalized.length!==quantity||new Set(normalized).size!==normalized.length)throw new ValidationError("Serial numbers must be unique and match quantity.");const states=serialStates(movements);for(const s of normalized)if(states.get(s)?.status!=="available")throw new ValidationError(`Serial number ${s} is not available.`);return normalized;}
+export interface InventoryReconciliation { quantityMatches:boolean; valueMatches:boolean; ledgerQuantity:number; ledgerValue:Money; cachedQuantity:number; cachedValue:Money; varianceQuantity:number; varianceValue:Money; }
+export function reconcileInventory(movements:readonly StockMovement[],scope:{businessId:string;financialYearId:string;itemId:string;warehouseId?:string},cached:{quantity:number;value:Money}):InventoryReconciliation{const balance=balanceFor(movements,scope);const dq=balance.quantity-cached.quantity,dv=balance.value-cached.value;if(!Number.isFinite(dq)||!Number.isSafeInteger(dv))throw new ValidationError("Inventory reconciliation variance is invalid.");return{quantityMatches:dq===0,valueMatches:dv===0,ledgerQuantity:balance.quantity,ledgerValue:balance.value,cachedQuantity:cached.quantity,cachedValue:cached.value,varianceQuantity:dq,varianceValue:dv};}
+export function calculateIssueCost(movements:readonly StockMovement[],quantity:number,method:StockValuationMethod){return calculateOutgoingCost(movements,quantity,method);}
+export function assertTransferHasStock(movements:readonly StockMovement[],scope:{businessId:string;financialYearId:string;itemId:string;warehouseId?:string},quantity:number){const b=balanceFor(movements,{...scope,warehouseId:normalizeWarehouseId(scope.warehouseId)});if(b.quantity<quantity)throw new ValidationError(`Insufficient stock. Available ${b.quantity}, required ${quantity}.`);return b;}
