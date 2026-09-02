@@ -1,6 +1,7 @@
-import type { AccountingRepository, AtomicAccountingDocument, Money, PostingResult, VoucherLineInput } from "./types";
+import type { AccountingRepository, AtomicAccountingDocument, Money, PostingResult, Voucher, VoucherLine, VoucherLineInput } from "./types";
 import { postIdempotentVoucher } from "./atomic";
 import { ValidationError } from "./errors";
+import { validateVoucherLines } from "./ledger";
 
 export interface CashBankDeps { ids:{next(prefix:string):string}; clock:{now():string}; }
 export interface CashBankBase { businessId:string; financialYearId:string; date:string; userId:string; idempotencyKey:string; narration?:string; reference?:string; notes?:string; }
@@ -22,7 +23,7 @@ export async function createCashBankAccount(repo:AccountingRepository,input:Cash
   if(!/^\d{4}-\d{2}-\d{2}$/.test(input.openingBalanceDate))throw new ValidationError("Opening balance date must be YYYY-MM-DD.");
   if(!input.accountId||!input.ledgerAccountId||!input.parentAccountId)throw new ValidationError("Account identifiers are required.");
   return repo.runInTransaction(async tx=>{
-    // Firestore requires all reads to complete before the first transaction write.
+    // Firestore transactions require every transaction read to happen before the first write.
     const existing=await tx.getBusinessDocument("bankAccounts",input.accountId);
     if(existing)throw new ValidationError("Cash/bank account already exists.");
     const fy=await tx.getFinancialYear(input.financialYearId);
@@ -35,13 +36,37 @@ export async function createCashBankAccount(repo:AccountingRepository,input:Cash
     const openingAccount=input.openingBalance>0?await tx.getAccount("acct-opening-balance"):null;
     if(input.openingBalance>0&&(!openingAccount||openingAccount.businessId!==input.businessId||openingAccount.type!=="equity"||!openingAccount.active))throw new ValidationError("Opening balance adjustment account is not configured.");
 
+    // Prepare every write using only the data already read above. No transaction reads follow this point.
     const now=deps.clock.now();
-    await tx.saveAccount({id:input.ledgerAccountId,businessId:input.businessId,code:`CB-${input.accountId.slice(-12)}`,name:input.displayName.trim(),type:"asset",parentId:input.parentAccountId,systemAccount:false,active:true,openingDebit:0,openingCredit:0,createdAt:now,updatedAt:now});
+    let openingVoucher:Voucher|undefined;
+    let openingLines:VoucherLine[]=[];
+    let openingLedgerEntries:VoucherLine[]=[];
     let openingVoucherId:string|undefined;
+
     if(input.openingBalance>0){
-      const lines:VoucherLineInput[]=input.openingBalanceType==="debit"?[dr(input.ledgerAccountId,input.openingBalance,{description:`Opening balance for ${input.displayName.trim()}`}),cr("acct-opening-balance",input.openingBalance,{description:"Opening balance adjustment"})]:[dr("acct-opening-balance",input.openingBalance,{description:"Opening balance adjustment"}),cr(input.ledgerAccountId,input.openingBalance,{description:`Opening balance for ${input.displayName.trim()}`})];
-      const key=`cashbank-opening:${input.accountId}:${input.openingBalanceDate}`;const result=await postIdempotentVoucher(tx,{businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"OPENING",prefix:"OB",date:input.openingBalanceDate,narration:`Opening balance for ${input.displayName.trim()}`,referenceType:"cash_bank_opening",referenceId:input.accountId,createdBy:input.createdBy,lines,idempotencyKey:key},deps);openingVoucherId=result.voucher.id;
-      await tx.saveAtomicDocument(atomic({id:`${result.voucher.id}:cashbankopening`,businessId:input.businessId,financialYearId:input.financialYearId,type:"opening",voucherId:result.voucher.id,idempotencyKey:key,date:input.openingBalanceDate,createdBy:input.createdBy,createdAt:now,payload:{operation:"cash_bank_opening",accountId:input.accountId,amount:input.openingBalance,balanceType:input.openingBalanceType}}));
+      const sequenceId=`${input.financialYearId}_OPENING`.replace(/[^a-zA-Z0-9_-]/g,"_");
+      const sequence=await tx.getBusinessDocument("voucherSequences",sequenceId);
+      const next=Number(sequence?.nextNumber??1);
+      if(!Number.isSafeInteger(next)||next<1)throw new ValidationError("Invalid opening voucher sequence.");
+      const voucherId=deps.ids.next("vch");
+      const voucherNumber=`OB-${String(next).padStart(6,"0")}`;
+      const rawLines:VoucherLineInput[]=input.openingBalanceType==="debit"
+        ? [dr(input.ledgerAccountId,input.openingBalance,{description:`Opening balance for ${input.displayName.trim()}`}),cr("acct-opening-balance",input.openingBalance,{description:"Opening balance adjustment"})]
+        : [dr("acct-opening-balance",input.openingBalance,{description:"Opening balance adjustment"}),cr(input.ledgerAccountId,input.openingBalance,{description:`Opening balance for ${input.displayName.trim()}`})];
+      openingLines=rawLines.map((line,index)=>({...line,lineId:deps.ids.next("line"),voucherId,businessId:input.businessId,lineNo:index+1}));
+      validateVoucherLines(openingLines);
+      openingLedgerEntries=openingLines.map(line=>({...line,date:input.openingBalanceDate,voucherType:"OPENING",voucherNumber,createdAt:now}));
+      openingVoucher={id:voucherId,businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"OPENING",voucherNumber,date:input.openingBalanceDate,status:"posted",referenceType:"cash_bank_opening",referenceId:input.accountId,narration:`Opening balance for ${input.displayName.trim()}`,totalDebit:input.openingBalance,totalCredit:input.openingBalance,createdBy:input.createdBy,createdAt:now,updatedAt:now,idempotencyKey:`cashbank-opening:${input.accountId}:${input.openingBalanceDate}`};
+      openingVoucherId=voucherId;
+      await tx.saveBusinessDocument("voucherSequences",sequenceId,{businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"OPENING",prefix:"OB",nextNumber:next+1,updatedAt:now});
+    }
+
+    await tx.saveAccount({id:input.ledgerAccountId,businessId:input.businessId,code:`CB-${input.accountId.slice(-12)}`,name:input.displayName.trim(),type:"asset",parentId:input.parentAccountId,systemAccount:false,active:true,openingDebit:0,openingCredit:0,createdAt:now,updatedAt:now});
+    if(openingVoucher){
+      await tx.saveVoucher(openingVoucher);
+      await tx.saveVoucherLines(openingLines);
+      await tx.saveLedgerEntries(openingLedgerEntries as any);
+      await tx.saveAtomicDocument(atomic({id:`${openingVoucher.id}:cashbankopening`,businessId:input.businessId,financialYearId:input.financialYearId,type:"opening",voucherId:openingVoucher.id,idempotencyKey:openingVoucher.idempotencyKey!,date:input.openingBalanceDate,createdBy:input.createdBy,createdAt:now,payload:{operation:"cash_bank_opening",accountId:input.accountId,amount:input.openingBalance,balanceType:input.openingBalanceType}}));
     }
     await tx.saveBusinessDocument("bankAccounts",input.accountId,{businessId:input.businessId,accountId:input.accountId,displayName:input.displayName.trim(),kind:input.kind,ledgerAccountId:input.ledgerAccountId,openingBalance:input.openingBalance,openingBalanceType:input.openingBalanceType,openingBalanceDate:input.openingBalanceDate,currentBalance:input.openingBalanceType==="debit"?input.openingBalance:-input.openingBalance,status:"active",...(input.details??{}),createdBy:input.createdBy,createdAt:now,updatedAt:now,...(openingVoucherId?{openingVoucherId}:{})});
     await tx.saveAuditEvent({id:deps.ids.next("audit"),businessId:input.businessId,entityType:"cash_bank_account",entityId:input.accountId,action:"ACCOUNT_CREATED",userId:input.createdBy,timestamp:now,after:{accountId:input.accountId,ledgerAccountId:input.ledgerAccountId,displayName:input.displayName.trim(),kind:input.kind,status:"active",openingBalance:input.openingBalance,openingBalanceType:input.openingBalanceType,...(openingVoucherId?{openingVoucherId}:{})}});
