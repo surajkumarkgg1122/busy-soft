@@ -36,6 +36,67 @@ async function currentFinancialYear(db: any, businessId: string) {
   return years[0].id;
 }
 
+function normalizeLedgerRow(row: any, fallback: Record<string, unknown> = {}) {
+  return {
+    lineId: String(row.lineId ?? row.id ?? fallback.lineId ?? randomUUID()),
+    voucherId: String(row.voucherId ?? fallback.voucherId ?? ""),
+    date: String(row.date ?? fallback.date ?? ""),
+    voucherNumber: String(row.voucherNumber ?? fallback.voucherNumber ?? ""),
+    voucherType: String(row.voucherType ?? fallback.voucherType ?? ""),
+    accountId: String(row.accountId ?? fallback.accountId ?? ""),
+    partyId: row.partyId ?? fallback.partyId,
+    description: String(row.description ?? fallback.description ?? ""),
+    debit: Number(row.debit ?? 0),
+    credit: Number(row.credit ?? 0),
+  };
+}
+
+/**
+ * The ledgerEntries collection is the canonical history. For old/partially migrated
+ * data, voucherLines can still prove that a Cash/Bank voucher exists. This fallback
+ * keeps the UI truthful instead of showing "No ledger activity" when the voucher and
+ * its accounting lines are already present.
+ */
+async function buildCashBankLedger(db: any, ref: any, financialYearId: string, ledgerAccountIds: string[]) {
+  const ledgerSnapshot = await ref.collection("ledgerEntries").where("financialYearId", "==", financialYearId).get();
+  const canonical = ledgerSnapshot.docs
+    .map((doc: any) => normalizeLedgerRow({ lineId: doc.id, ...doc.data() }))
+    .filter((row: any) => ledgerAccountIds.includes(row.accountId));
+  if (canonical.length > 0 || ledgerAccountIds.length === 0) return { rows: canonical, source: "ledgerEntries" };
+
+  const lineSnapshots: any[] = [];
+  for (let i = 0; i < ledgerAccountIds.length; i += 30) {
+    const chunk = ledgerAccountIds.slice(i, i + 30);
+    const snapshot = await ref.collection("voucherLines").where("accountId", "in", chunk).get();
+    lineSnapshots.push(...snapshot.docs);
+  }
+  if (!lineSnapshots.length) return { rows: [], source: "ledgerEntries" };
+
+  const voucherIds = [...new Set(lineSnapshots.map((doc: any) => String(doc.data()?.voucherId ?? "")).filter(Boolean))];
+  const vouchers = new Map<string, any>();
+  for (let i = 0; i < voucherIds.length; i += 30) {
+    const chunk = voucherIds.slice(i, i + 30);
+    const snapshot = await ref.collection("vouchers").where("financialYearId", "==", financialYearId).where("id", "in", chunk).get().catch(() => null);
+    if (snapshot) for (const doc of snapshot.docs) vouchers.set(doc.id, { id: doc.id, ...doc.data() });
+  }
+
+  const rows = lineSnapshots.map((doc: any) => {
+    const line = doc.data() ?? {};
+    const voucher = vouchers.get(String(line.voucherId ?? ""));
+    return normalizeLedgerRow({ lineId: doc.id, ...line }, {
+      voucherId: line.voucherId,
+      accountId: line.accountId,
+      partyId: line.partyId,
+      date: voucher?.date,
+      voucherNumber: voucher?.voucherNumber,
+      voucherType: voucher?.voucherType,
+      description: line.description ?? voucher?.narration,
+    });
+  }).filter((row: any) => row.voucherId && row.voucherType.toUpperCase() !== "OPENING");
+  rows.sort((a: any, b: any) => `${a.date}:${a.voucherNumber}:${a.lineId}`.localeCompare(`${b.date}:${b.voucherNumber}:${b.lineId}`));
+  return { rows, source: "voucherLines-fallback" };
+}
+
 export async function GET(request: Request) {
   try {
     const { db, token } = await authenticate(request);
@@ -48,22 +109,19 @@ export async function GET(request: Request) {
     const financialYearId = await currentFinancialYear(db, businessId);
     const includeInactive = url.searchParams.get("includeInactive") === "true";
     const accountQuery = includeInactive ? ref.collection("bankAccounts") : ref.collection("bankAccounts").where("status", "==", "active");
-    const [accountSnapshot, ledgerSnapshot, glSnapshot, partySnapshot] = await Promise.all([
+    const [accountSnapshot, glSnapshot, partySnapshot] = await Promise.all([
       accountQuery.get(),
-      ref.collection("ledgerEntries").where("financialYearId", "==", financialYearId).get(),
       ref.collection("accounts").where("active", "==", true).get(),
       ref.collection("parties").where("status", "==", "active").get(),
     ]);
 
     const accountDocs = accountSnapshot.docs.map((doc: any) => ({ accountId: doc.id, ...doc.data() }));
-    const ledger = ledgerSnapshot.docs.map((doc: any) => ({ lineId: doc.id, ...doc.data() })).sort((a: any, b: any) => `${a.date}:${a.voucherNumber ?? ""}:${a.lineNo ?? 0}`.localeCompare(`${b.date}:${b.voucherNumber ?? ""}:${b.lineNo ?? 0}`));
+    const ledgerAccountIds = accountDocs.map((account: any) => String(account.ledgerAccountId ?? "")).filter(Boolean);
+    const history = await buildCashBankLedger(db, ref, financialYearId, ledgerAccountIds);
+    const ledger = history.rows;
     const glMap = new Map<string, any>(glSnapshot.docs.map((doc: any) => [doc.id, { accountId: doc.id, ...doc.data() }]));
     const activity = new Map<string, number>();
-    for (const row of ledger) {
-      const accountId = String(row.accountId ?? "");
-      if (!accountId || String(row.voucherType ?? "").toUpperCase() === "OPENING") continue;
-      activity.set(accountId, (activity.get(accountId) ?? 0) + Number(row.debit ?? 0) - Number(row.credit ?? 0));
-    }
+    for (const row of ledger) activity.set(row.accountId, (activity.get(row.accountId) ?? 0) + Number(row.debit ?? 0) - Number(row.credit ?? 0));
 
     const accounts = accountDocs.map((account: any) => {
       const ledgerAccountId = String(account.ledgerAccountId ?? "");
@@ -72,17 +130,12 @@ export async function GET(request: Request) {
       const glOpening = Number(gl?.openingDebit ?? 0) - Number(gl?.openingCredit ?? 0);
       const hasCanonicalOpening = Boolean(account.openingVoucherId) || account.openingBalance !== undefined;
       const opening = hasCanonicalOpening ? storedOpening : glOpening;
-      return {
-        ...account,
-        currentBalance: opening + Number(activity.get(ledgerAccountId) ?? 0),
-        balanceSource: "ledger",
-        ledgerHealthy: Boolean(gl && gl.type === "asset" && gl.active !== false),
-      };
+      return { ...account, currentBalance: opening + Number(activity.get(ledgerAccountId) ?? 0), balanceSource: history.source, ledgerHealthy: Boolean(gl && gl.type === "asset" && gl.active !== false) };
     });
 
     const glAccounts = glSnapshot.docs.map((doc: any) => ({ accountId: doc.id, ...doc.data() })).sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
     const parties = partySnapshot.docs.map((doc: any) => { const p = doc.data() as any; return { partyId: doc.id, name: String(p.name ?? doc.id), kind: p.kind, ledgerAccountId: String(p.ledgerAccountId ?? "") }; }).filter((p: any) => p.ledgerAccountId).sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
-    return NextResponse.json({ success: true, financialYearId, accounts, glAccounts, parties, ledger: ledger.slice(-1000).reverse(), hasMoreLedger: ledger.length > 1000 });
+    return NextResponse.json({ success: true, financialYearId, accounts, glAccounts, parties, ledger: ledger.slice(-1000).reverse(), hasMoreLedger: ledger.length > 1000, historySource: history.source });
   } catch (error: any) { return fail(error?.message ?? "Unable to load cash and bank data.", error?.status ?? 500); }
 }
 
@@ -104,7 +157,7 @@ export async function POST(request: Request) {
       const kind = body.kind === "cash" ? "cash" : "bank";
       const displayName = String(body.displayName ?? "").trim();
       if (!displayName) return fail("Account name is required.");
-      const openingBalance = rupees(body.openingBalance ?? 0, "Opening balance") * 1;
+      const openingBalance = rupees(body.openingBalance ?? 0, "Opening balance");
       const openingBalanceType = body.openingBalanceType === "credit" ? "credit" : "debit";
       const openingBalanceDate = date(body.openingBalanceDate ?? new Date().toISOString().slice(0, 10), "Opening balance date");
       const accountId = `${kind}-${randomUUID()}`;
@@ -178,6 +231,7 @@ export async function POST(request: Request) {
       const result = await reversePostedVoucher(repo, { businessId, financialYearId: String(voucher.financialYearId ?? financialYearId), voucherId, userId: token.uid, idempotencyKey: idempotencyKey(body), date: date(body.date ?? voucher.date, "Reversal date"), narration: String(body.narration ?? `Cash/Bank transaction reversal of ${voucher.voucherNumber ?? voucherId}`) }, deps());
       return NextResponse.json({ success: true, voucherId: result.voucher.id, voucherNumber: result.voucher.voucherNumber });
     }
-    return fail("Unsupported Cash & Bank action.");
-  } catch (error: any) { return fail(error?.message ?? "Cash & Bank request failed.", error?.status ?? (/authentication|expired|token/i.test(error?.message ?? "") ? 401 : 400)); }
+
+    return fail("Unknown Cash & Bank action.");
+  } catch (error: any) { return fail(error?.message ?? "Unable to process Cash & Bank request.", error?.status ?? 500); }
 }
