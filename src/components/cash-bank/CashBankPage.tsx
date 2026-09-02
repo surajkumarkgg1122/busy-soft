@@ -7,45 +7,303 @@ import Sidebar from "@/app/Components/Sidebar/page";
 import TopNav from "@/app/Components/TopNav/page";
 import AuthGate from "@/app/Components/Auth/AuthGate";
 
-type Account={accountId:string;businessId:string;displayName:string;kind:"cash"|"bank";ledgerAccountId:string;currentBalance:number;openingBalance?:number;openingBalanceDate?:string;bankName?:string;accountNumber?:string;ifscCode?:string;upiId?:string;accountHolderName?:string;status:"active"|"inactive";ledgerHealthy?:boolean};
-type GL={accountId:string;name:string;type:string;active:boolean};
-type Ledger={lineId:string;voucherId:string;date:string;voucherNumber?:string;voucherType?:string;accountId:string;description?:string;debit:number;credit:number};
-type Modal="account"|"edit"|"entry"|"transfer"|null;
-const today=()=>new Date().toISOString().slice(0,10);
-const money=(n:number)=>new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:2}).format((Number(n)||0)/100);
-const input="w-full rounded-lg border border-[#d0d5dd] bg-white px-3 py-2.5 text-sm outline-none focus:border-[#465fff] focus:ring-2 focus:ring-[#465fff]/10";
-async function api(path:string,body?:Record<string,unknown>){const user=firebaseAuth.currentUser;if(!user)throw new Error("You must be signed in.");const token=await user.getIdToken();const r=await fetch(path,{method:body?"POST":"GET",headers:{Authorization:`Bearer ${token}`,...(body?{"Content-Type":"application/json"}:{})},body:body?JSON.stringify(body):undefined,cache:"no-store"});const text=await r.text();let data:Record<string,any>|null=null;try{data=text?JSON.parse(text):{};}catch{throw new Error(`Server returned a non-JSON response (HTTP ${r.status}).`);}if(!r.ok||data?.success!==true)throw new Error(String(data?.error||`Server request failed (HTTP ${r.status}).`));return data;}
-function ModalShell({title,children,onClose,footer}:{title:string;children:ReactNode;onClose:()=>void;footer:ReactNode}){return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-[#eaecf0] px-6 py-4"><h2 className="text-lg font-bold text-[#101828]">{title}</h2><button type="button" onClick={onClose} className="rounded-md px-2 py-1 text-xl text-[#667085] hover:bg-[#f2f4f7]">×</button></div><div className="max-h-[70vh] overflow-y-auto px-6 py-5">{children}</div><div className="flex justify-end gap-2 border-t border-[#eaecf0] bg-[#f9fafb] px-6 py-4">{footer}</div></div></div>}
-function Field({label,children}:{label:string;children:ReactNode}){return <label className="block"><span className="mb-1.5 block text-xs font-semibold text-[#344054]">{label}</span>{children}</label>}
-export default function CashBankPage(){
- const{activeBusinessId,activeBusiness,can,loading:businessLoading}=useBusiness();
- const[accounts,setAccounts]=useState<Account[]>([]),[gl,setGl]=useState<GL[]>([]),[ledger,setLedger]=useState<Ledger[]>([]),[fy,setFy]=useState(""),[selected,setSelected]=useState<Account|null>(null);
- const[modal,setModal]=useState<Modal>(null),[kind,setKind]=useState<"cash"|"bank">("bank"),[entryType,setEntryType]=useState<"deposit"|"withdrawal">("deposit"),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[error,setError]=useState(""),[query,setQuery]=useState(""),[showInactive,setShowInactive]=useState(false);
- const[form,setForm]=useState({displayName:"",openingBalance:"0",openingBalanceDate:today(),bankName:"",accountNumber:"",ifscCode:"",upiId:"",accountHolderName:""});
- const[entry,setEntry]=useState({name:"",amount:"",date:today(),reference:"",notes:"",contra:""});
- const[transfer,setTransfer]=useState({from:"",to:"",amount:"",date:today(),reference:"",notes:""});
- const canCreate=can("cashBank","create"),canEdit=can("cashBank","edit");
- async function load(){if(!activeBusinessId)return;setLoading(true);try{const d=await api(`/api/cash-bank?businessId=${encodeURIComponent(activeBusinessId)}&includeInactive=${showInactive}`);setAccounts(d.accounts||[]);setGl(d.glAccounts||[]);setLedger(d.ledger||[]);setFy(d.financialYearId||"");setSelected(prev=>(d.accounts||[]).find((a:Account)=>a.accountId===prev?.accountId)||(d.accounts||[]).find((a:Account)=>a.status==="active")||(d.accounts||[])[0]||null);}catch(e){setError(e instanceof Error?e.message:"Unable to load Cash & Bank.");}finally{setLoading(false)}}
- useEffect(()=>{if(!businessLoading)void load()},[activeBusinessId,businessLoading,showInactive]);
- const filtered=useMemo(()=>{const q=query.toLowerCase().trim();return accounts.filter(a=>!q||`${a.displayName} ${a.bankName||""} ${a.accountNumber||""}`.toLowerCase().includes(q))},[accounts,query]);
- const activeAccounts=useMemo(()=>accounts.filter(a=>a.status==="active"),[accounts]);
- const rows=useMemo(()=>selected?ledger.filter(x=>x.accountId===selected.ledgerAccountId).sort((a,b)=>`${a.date}:${a.voucherNumber||""}:${a.lineId}`.localeCompare(`${b.date}:${b.voucherNumber||""}:${b.lineId}`)):[],[selected,ledger]);
- const running=useMemo(()=>rows.reduce<{rows:(Ledger&{balance:number})[];balance:number}>((a,x)=>{const balance=a.balance+Number(x.debit||0)-Number(x.credit||0);a.rows.push({...x,balance});return a},{rows:[],balance:Number(selected?.openingBalance||0)}),[rows,selected]);
- const totals={cash:accounts.filter(a=>a.kind==="cash"&&a.status==="active").reduce((s,a)=>s+a.currentBalance,0),bank:accounts.filter(a=>a.kind==="bank"&&a.status==="active").reduce((s,a)=>s+a.currentBalance,0)};
- function reset(){setModal(null);setSaving(false);setEntry({name:"",amount:"",date:today(),reference:"",notes:"",contra:""});setTransfer({from:"",to:"",amount:"",date:today(),reference:"",notes:""});setForm({displayName:"",openingBalance:"0",openingBalanceDate:today(),bankName:"",accountNumber:"",ifscCode:"",upiId:"",accountHolderName:""});}
- function edit(a:Account){setSelected(a);setKind(a.kind);setForm({displayName:a.displayName,openingBalance:String((Number(a.openingBalance||0)/100).toFixed(2)),openingBalanceDate:a.openingBalanceDate||today(),bankName:a.bankName||"",accountNumber:a.accountNumber||"",ifscCode:a.ifscCode||"",upiId:a.upiId||"",accountHolderName:a.accountHolderName||""});setModal("edit")}
- async function createAccount(){if(!activeBusinessId)return;try{setSaving(true);if(!form.displayName.trim())throw new Error("Account name is required.");await api("/api/cash-bank",{action:"account",businessId:activeBusinessId,kind,displayName:form.displayName,openingBalance:Number(form.openingBalance||0),openingBalanceDate:form.openingBalanceDate,bankName:form.bankName,accountNumber:form.accountNumber,ifscCode:form.ifscCode,upiId:form.upiId,accountHolderName:form.accountHolderName});reset();await load()}catch(e){setError(e instanceof Error?e.message:"Unable to create account.")}finally{setSaving(false)}}
- async function updateAccount(){if(!activeBusinessId||!selected)return;try{setSaving(true);await api("/api/cash-bank",{action:"account_update",businessId:activeBusinessId,accountId:selected.accountId,displayName:form.displayName,bankName:form.bankName,accountNumber:form.accountNumber,ifscCode:form.ifscCode,upiId:form.upiId,accountHolderName:form.accountHolderName});reset();await load()}catch(e){setError(e instanceof Error?e.message:"Unable to update account.")}finally{setSaving(false)}}
- async function toggleStatus(){if(!activeBusinessId||!selected)return;const status=selected.status==="active"?"inactive":"active";try{setSaving(true);await api("/api/cash-bank",{action:"account_status",businessId:activeBusinessId,accountId:selected.accountId,status});await load()}catch(e){setError(e instanceof Error?e.message:"Unable to change account status.")}finally{setSaving(false)}}
- async function submitEntry(){if(!activeBusinessId||!selected)return;try{setSaving(true);const amount=Number(entry.amount);const contra=gl.find(a=>a.accountId===entry.contra);if(!entry.name.trim()||amount<=0||!contra)throw new Error("Enter a description, positive amount, and counter account.");await api("/api/cash-bank",{action:"entry",businessId:activeBusinessId,financialYearId:fy,accountId:selected.accountId,type:entryType,amount,name:entry.name,date:entry.date,reference:entry.reference,notes:entry.notes,contraAccountId:contra.accountId,idempotencyKey:`cb-${crypto.randomUUID()}`});reset();await load()}catch(e){setError(e instanceof Error?e.message:"Unable to post transaction.")}finally{setSaving(false)}}
- async function submitTransfer(){if(!activeBusinessId)return;try{setSaving(true);const amount=Number(transfer.amount);if(!transfer.from||!transfer.to||transfer.from===transfer.to||amount<=0)throw new Error("Select different active source and destination accounts and a positive amount.");await api("/api/cash-bank",{action:"transfer",businessId:activeBusinessId,financialYearId:fy,fromAccountId:transfer.from,toAccountId:transfer.to,amount,date:transfer.date,reference:transfer.reference,notes:transfer.notes,idempotencyKey:`cb-transfer-${crypto.randomUUID()}`});reset();await load()}catch(e){setError(e instanceof Error?e.message:"Unable to post transfer.")}finally{setSaving(false)}}
- async function reverse(voucherId:string,date:string){if(!activeBusinessId)return;try{setSaving(true);await api("/api/cash-bank",{action:"reverse",businessId:activeBusinessId,voucherId,date,idempotencyKey:`cb-reversal-${crypto.randomUUID()}`});await load()}catch(e){setError(e instanceof Error?e.message:"Unable to reverse voucher.")}finally{setSaving(false)}}
- const Btn=({children,onClick,primary=false,disabled=false}:{children:ReactNode;onClick?:()=>void;primary?:boolean;disabled?:boolean})=><button type="button" disabled={disabled} onClick={onClick} className={`rounded-lg px-4 py-2 text-sm font-semibold ${primary?"bg-[#465fff] text-white":"border border-[#d0d5dd] bg-white text-[#344054]"} disabled:cursor-not-allowed disabled:opacity-50`}>{children}</button>;
- return <AuthGate><div className="flex min-h-screen bg-[#f8f9fb]"><Sidebar/><main className="min-w-0 flex-1 px-5 pb-10 sm:px-8 lg:px-10"><TopNav/><div className="mx-auto max-w-[1500px] py-5"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm font-semibold text-[#465fff]">{activeBusiness?.business.name||"Business"} · Money</p><h1 className="mt-1 text-3xl font-bold text-[#101828]">Cash & Bank</h1><p className="mt-1 text-sm text-[#667085]">Accounts, deposits, withdrawals, transfers and controlled reversals.</p></div>{canCreate&&<div className="flex gap-2"><Btn onClick={()=>{setTransfer(t=>({...t,from:activeAccounts[0]?.accountId||"",to:activeAccounts[1]?.accountId||""}));setModal("transfer")}}>Transfer</Btn><Btn primary onClick={()=>setModal("account")}>New Account</Btn></div>}</div>{error&&<div className="mt-4 rounded-lg border border-[#fecdca] bg-[#fef3f2] px-4 py-3 text-sm text-[#b42318]">{error}</div>}<div className="mt-6 grid gap-4 md:grid-cols-3"><Card title="Total liquidity" value={money(totals.cash+totals.bank)}/><Card title="Cash in hand" value={money(totals.cash)}/><Card title="Bank balance" value={money(totals.bank)}/></div><div className="mt-6 rounded-xl border border-[#e4e7ec] bg-white shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4"><div><h2 className="font-bold text-[#101828]">Accounts</h2><p className="text-xs text-[#98a2b3]">FY {fy||"—"} · {accounts.length} displayed</p></div><div className="flex gap-3"><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={showInactive} onChange={e=>setShowInactive(e.target.checked)}/>Show inactive</label><input className="h-9 w-56 rounded-lg border px-3 text-sm" placeholder="Search accounts" value={query} onChange={e=>setQuery(e.target.value)}/></div></div><div className="grid lg:grid-cols-[380px_1fr]"><div className="border-r">{loading?<div className="p-8 text-sm text-[#667085]">Loading…</div>:filtered.map(a=><button key={a.accountId} type="button" onClick={()=>setSelected(a)} className={`block w-full border-b px-5 py-4 text-left hover:bg-[#f9fafb] ${selected?.accountId===a.accountId?"bg-[#f5f7ff]":""}`}><div className="flex justify-between gap-3"><span><span className="block text-sm font-semibold text-[#344054]">{a.displayName}</span><span className="block text-xs text-[#667085]">{a.kind}{a.bankName?` · ${a.bankName}`:""}</span></span><span className="text-sm font-bold">{money(a.currentBalance)}</span></div></button>)}</div><div className="min-h-[520px]">{!selected?<div className="flex min-h-[520px] items-center justify-center text-sm text-[#667085]">Select a cash or bank account.</div>:<><div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4"><div><h3 className="font-bold">{selected.displayName}</h3><p className="text-xs text-[#667085]">{selected.kind} · {selected.status} · GL {selected.ledgerAccountId}</p></div><div className="flex flex-wrap gap-2">{canEdit&&<Btn onClick={()=>edit(selected)}>Edit</Btn>}{canEdit&&<Btn disabled={saving} onClick={()=>void toggleStatus()}>{selected.status==="active"?"Deactivate":"Activate"}</Btn>}{canCreate&&selected.status==="active"&&<Btn primary onClick={()=>{setEntryType("deposit");setModal("entry")}}>Deposit / Withdrawal</Btn>}</div></div><div className="p-5">{!running.rows.length?<div className="rounded-lg border border-dashed p-10 text-center text-sm text-[#667085]">No ledger activity.</div>:<div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="bg-[#f9fafb]"><tr><th className="p-3 text-left">Date</th><th className="p-3 text-left">Voucher</th><th className="p-3 text-left">Description</th><th className="p-3 text-right">Debit</th><th className="p-3 text-right">Credit</th><th className="p-3 text-right">Balance</th><th/></tr></thead><tbody>{running.rows.map(r=><tr key={r.lineId} className="border-t"><td className="p-3">{r.date}</td><td className="p-3">{r.voucherNumber||r.voucherId}</td><td className="p-3">{r.description||r.voucherType||"—"}</td><td className="p-3 text-right">{r.debit?money(r.debit):"—"}</td><td className="p-3 text-right">{r.credit?money(r.credit):"—"}</td><td className="p-3 text-right font-semibold">{money(r.balance)}</td><td className="p-3 text-right">{canEdit&&!r.voucherType?.toLowerCase().includes("reversal")&&<button className="text-xs font-semibold text-[#b42318]" type="button" onClick={()=>void reverse(r.voucherId,r.date)}>Reverse</button>}</td></tr>)}</tbody></table></div>}</div></>}</div></div></div></div></main></div>
- {modal==="account"&&<ModalShell title="New Cash / Bank Account" onClose={reset} footer={<><Btn onClick={reset}>Cancel</Btn><Btn primary disabled={saving} onClick={()=>void createAccount()}>{saving?"Saving…":"Create Account"}</Btn></>}><div className="grid gap-4 md:grid-cols-2"><Field label="Account type"><select className={input} value={kind} onChange={e=>setKind(e.target.value as "cash"|"bank")}><option value="cash">Cash</option><option value="bank">Bank</option></select></Field><Field label="Account name"><input className={input} value={form.displayName} onChange={e=>setForm(f=>({...f,displayName:e.target.value}))}/></Field><Field label="Opening balance (₹)"><input className={input} type="number" min="0" step="0.01" value={form.openingBalance} onChange={e=>setForm(f=>({...f,openingBalance:e.target.value}))}/></Field><Field label="Opening date"><input className={input} type="date" value={form.openingBalanceDate} onChange={e=>setForm(f=>({...f,openingBalanceDate:e.target.value}))}/></Field>{kind==="bank"&&<><Field label="Bank name"><input className={input} value={form.bankName} onChange={e=>setForm(f=>({...f,bankName:e.target.value}))}/></Field><Field label="Account number"><input className={input} value={form.accountNumber} onChange={e=>setForm(f=>({...f,accountNumber:e.target.value}))}/></Field><Field label="IFSC"><input className={input} value={form.ifscCode} onChange={e=>setForm(f=>({...f,ifscCode:e.target.value}))}/></Field><Field label="UPI ID"><input className={input} value={form.upiId} onChange={e=>setForm(f=>({...f,upiId:e.target.value}))}/></Field></>}</div></ModalShell>}
- {modal==="edit"&&<ModalShell title={`Edit ${selected?.displayName||"Account"}`} onClose={reset} footer={<><Btn onClick={reset}>Cancel</Btn><Btn primary disabled={saving} onClick={()=>void updateAccount()}>{saving?"Saving…":"Save Changes"}</Btn></>}><div className="grid gap-4 md:grid-cols-2"><Field label="Account name"><input className={input} value={form.displayName} onChange={e=>setForm(f=>({...f,displayName:e.target.value}))}/></Field><Field label="Bank name"><input className={input} value={form.bankName} onChange={e=>setForm(f=>({...f,bankName:e.target.value}))}/></Field><Field label="Account number"><input className={input} value={form.accountNumber} onChange={e=>setForm(f=>({...f,accountNumber:e.target.value}))}/></Field><Field label="IFSC"><input className={input} value={form.ifscCode} onChange={e=>setForm(f=>({...f,ifscCode:e.target.value}))}/></Field><Field label="UPI ID"><input className={input} value={form.upiId} onChange={e=>setForm(f=>({...f,upiId:e.target.value}))}/></Field><Field label="Account holder"><input className={input} value={form.accountHolderName} onChange={e=>setForm(f=>({...f,accountHolderName:e.target.value}))}/></Field></div></ModalShell>}
- {modal==="entry"&&<ModalShell title={`${entryType==="deposit"?"Deposit":"Withdrawal"} · ${selected?.displayName||""}`} onClose={reset} footer={<><Btn onClick={reset}>Cancel</Btn><Btn primary disabled={saving} onClick={()=>void submitEntry()}>{saving?"Posting…":"Post Transaction"}</Btn></>}><div className="grid gap-4 md:grid-cols-2"><div className="md:col-span-2 flex gap-2"><button type="button" onClick={()=>setEntryType("deposit")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${entryType==="deposit"?"bg-[#465fff] text-white":"border"}`}>Deposit</button><button type="button" onClick={()=>setEntryType("withdrawal")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${entryType==="withdrawal"?"bg-[#465fff] text-white":"border"}`}>Withdrawal</button></div><Field label="Description"><input className={input} value={entry.name} onChange={e=>setEntry(x=>({...x,name:e.target.value}))}/></Field><Field label="Amount (₹)"><input className={input} type="number" min="0" step="0.01" value={entry.amount} onChange={e=>setEntry(x=>({...x,amount:e.target.value}))}/></Field><Field label="Date"><input className={input} type="date" value={entry.date} onChange={e=>setEntry(x=>({...x,date:e.target.value}))}/></Field><Field label="Counter account"><select className={input} value={entry.contra} onChange={e=>setEntry(x=>({...x,contra:e.target.value}))}><option value="">Select account</option>{gl.filter(a=>a.accountId!==selected?.ledgerAccountId).map(a=><option key={a.accountId} value={a.accountId}>{a.name}</option>)}</select></Field><Field label="Reference"><input className={input} value={entry.reference} onChange={e=>setEntry(x=>({...x,reference:e.target.value}))}/></Field><Field label="Notes"><input className={input} value={entry.notes} onChange={e=>setEntry(x=>({...x,notes:e.target.value}))}/></Field></div></ModalShell>}
- {modal==="transfer"&&<ModalShell title="Transfer Between Cash / Bank Accounts" onClose={reset} footer={<><Btn onClick={reset}>Cancel</Btn><Btn primary disabled={saving||activeAccounts.length<2} onClick={()=>void submitTransfer()}>{saving?"Posting…":"Post Transfer"}</Btn></>}><div className="grid gap-4 md:grid-cols-2"><Field label="From account"><select className={input} value={transfer.from} onChange={e=>setTransfer(x=>({...x,from:e.target.value}))}><option value="">Select source</option>{activeAccounts.map(a=><option key={a.accountId} value={a.accountId}>{a.displayName} · {money(a.currentBalance)}</option>)}</select></Field><Field label="To account"><select className={input} value={transfer.to} onChange={e=>setTransfer(x=>({...x,to:e.target.value}))}><option value="">Select destination</option>{activeAccounts.map(a=><option key={a.accountId} value={a.accountId}>{a.displayName}</option>)}</select></Field><Field label="Amount (₹)"><input className={input} type="number" min="0" step="0.01" value={transfer.amount} onChange={e=>setTransfer(x=>({...x,amount:e.target.value}))}/></Field><Field label="Date"><input className={input} type="date" value={transfer.date} onChange={e=>setTransfer(x=>({...x,date:e.target.value}))}/></Field><Field label="Reference"><input className={input} value={transfer.reference} onChange={e=>setTransfer(x=>({...x,reference:e.target.value}))}/></Field><Field label="Notes"><input className={input} value={transfer.notes} onChange={e=>setTransfer(x=>({...x,notes:e.target.value}))}/></Field></div></ModalShell>}
- </AuthGate>;
+type Account = {
+  accountId: string;
+  businessId: string;
+  displayName: string;
+  kind: "cash" | "bank";
+  ledgerAccountId: string;
+  currentBalance: number;
+  openingBalance?: number;
+  openingBalanceDate?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  upiId?: string;
+  accountHolderName?: string;
+  status: "active" | "inactive";
+  ledgerHealthy?: boolean;
+};
+
+type GL = { accountId: string; name: string; type: string; active: boolean };
+type Ledger = { lineId: string; voucherId: string; date: string; voucherNumber?: string; voucherType?: string; accountId: string; description?: string; debit: number; credit: number };
+type Modal = "account" | "entry" | "transfer" | null;
+type EntryType = "deposit" | "withdrawal";
+
+const today = () => new Date().toISOString().slice(0, 10);
+const money = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format((Number(value) || 0) / 100);
+const inputClass = "w-full rounded-lg border border-[#d0d5dd] bg-white px-3 py-2.5 text-sm text-[#101828] outline-none transition focus:border-[#465fff] focus:ring-2 focus:ring-[#465fff]/10";
+const buttonClass = "inline-flex items-center justify-center rounded-lg border border-[#d0d5dd] bg-white px-3.5 py-2 text-sm font-semibold text-[#344054] shadow-sm transition hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-50";
+const primaryButtonClass = "inline-flex items-center justify-center rounded-lg bg-[#465fff] px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#364bdc] disabled:cursor-not-allowed disabled:opacity-50";
+
+async function api(path: string, body?: Record<string, unknown>) {
+  const user = firebaseAuth.currentUser;
+  if (!user) throw new Error("You must be signed in.");
+  const token = await user.getIdToken();
+  const response = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+  const text = await response.text();
+  let payload: Record<string, any> | null = null;
+  try { payload = text ? JSON.parse(text) : {}; } catch {
+    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 220);
+    throw new Error(snippet ? `Server returned a non-JSON response (HTTP ${response.status}): ${snippet}` : `Server returned an empty response (HTTP ${response.status}).`);
+  }
+  if (!response.ok || payload?.success !== true) throw new Error(String(payload?.error || `Server request failed (HTTP ${response.status}).`));
+  return payload;
 }
-function Card({title,value}:{title:string;value:string}){return <div className="rounded-xl border border-[#e4e7ec] bg-white p-5 shadow-sm"><p className="text-xs font-semibold uppercase tracking-wide text-[#98a2b3]">{title}</p><p className="mt-2 text-2xl font-bold text-[#101828]">{value}</p></div>}
+
+function Icon({ name }: { name: "cash" | "bank" | "transfer" | "plus" | "refresh" | "edit" | "undo" | "power" | "search" | "arrow" }) {
+  const paths = {
+    cash: "M4 7h16v12H4zM7 7V5h10v2M8 13h8M12 10v6",
+    bank: "M3 10 12 4l9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 18h18",
+    transfer: "M7 7h10l-3-3m3 3-3 3M17 17H7l3 3m-3-3 3-3",
+    plus: "M12 5v14M5 12h14",
+    refresh: "M20 11a8 8 0 0 0-14.7-4L3 10m0 0h5m-5 0V5m1 8a8 8 0 0 0 14.7 4L21 14m0 0h-5m5 0v5",
+    edit: "m4 20 4.3-1 10.1-10.1a2.1 2.1 0 0 0-3-3L5.3 16 4 20ZM14.8 7.2l2 2",
+    undo: "M9 8H4v5m0-5 4 4",
+    power: "M12 3v9m6.4-6.4a9 9 0 1 1-12.8 0",
+    search: "m21 21-4.5-4.5M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z",
+    arrow: "M5 12h14m-6-6 6 6-6 6",
+  } as const;
+  return <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
+}
+
+function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+  return <label className="block"><span className="mb-1.5 block text-xs font-semibold text-[#344054]">{label}</span>{children}{hint && <span className="mt-1 block text-[11px] text-[#98a2b3]">{hint}</span>}</label>;
+}
+
+function ModalShell({ title, subtitle, children, footer, onClose, width = "max-w-2xl" }: { title: string; subtitle?: string; children: ReactNode; footer: ReactNode; onClose: () => void; width?: string }) {
+  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className={`w-full ${width} overflow-hidden rounded-2xl border border-[#e4e7ec] bg-white shadow-2xl`}>
+      <div className="flex items-start justify-between border-b border-[#eaecf0] px-6 py-4">
+        <div><h2 className="text-lg font-bold text-[#101828]">{title}</h2>{subtitle && <p className="mt-1 text-xs text-[#667085]">{subtitle}</p>}</div>
+        <button type="button" onClick={onClose} className="rounded-md px-2 py-1 text-xl text-[#667085] hover:bg-[#f2f4f7]">×</button>
+      </div>
+      <div className="max-h-[72vh] overflow-y-auto px-6 py-5">{children}</div>
+      <div className="flex justify-end gap-2 border-t border-[#eaecf0] bg-[#f9fafb] px-6 py-4">{footer}</div>
+    </div>
+  </div>;
+}
+
+export default function CashBankPage() {
+  const { activeBusinessId, activeBusiness, can, loading: businessLoading } = useBusiness();
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [gl, setGl] = useState<GL[]>([]);
+  const [ledger, setLedger] = useState<Ledger[]>([]);
+  const [financialYearId, setFinancialYearId] = useState("");
+  const [selected, setSelected] = useState<Account | null>(null);
+  const [modal, setModal] = useState<Modal>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
+  const [kind, setKind] = useState<"cash" | "bank">("bank");
+  const [entryType, setEntryType] = useState<EntryType>("deposit");
+  const [accountForm, setAccountForm] = useState({ displayName: "", openingBalance: "0", openingBalanceDate: today(), bankName: "", accountNumber: "", ifscCode: "", upiId: "", accountHolderName: "" });
+  const [entryForm, setEntryForm] = useState({ name: "", amount: "", date: today(), reference: "", notes: "", contra: "" });
+  const [transferForm, setTransferForm] = useState({ from: "", to: "", amount: "", date: today(), reference: "", notes: "" });
+  const canCreate = can("cashBank", "create");
+  const canEdit = can("cashBank", "edit");
+
+  async function load() {
+    if (!activeBusinessId) return;
+    setLoading(true);
+    setError("");
+    try {
+      const data = await api(`/api/cash-bank?businessId=${encodeURIComponent(activeBusinessId)}&includeInactive=${showInactive}`);
+      const nextAccounts = (data.accounts || []) as Account[];
+      setAccounts(nextAccounts);
+      setGl((data.glAccounts || []) as GL[]);
+      setLedger((data.ledger || []) as Ledger[]);
+      setFinancialYearId(String(data.financialYearId || ""));
+      setSelected((previous) => nextAccounts.find((account) => account.accountId === previous?.accountId) || nextAccounts.find((account) => account.status === "active") || nextAccounts[0] || null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to load Cash & Bank.");
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => { if (!businessLoading) void load(); }, [activeBusinessId, businessLoading, showInactive]);
+
+  const filteredAccounts = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return accounts.filter((account) => !q || `${account.displayName} ${account.bankName || ""} ${account.accountNumber || ""}`.toLowerCase().includes(q));
+  }, [accounts, query]);
+
+  const activeAccounts = useMemo(() => accounts.filter((account) => account.status === "active"), [accounts]);
+  const totals = useMemo(() => ({ cash: activeAccounts.filter((account) => account.kind === "cash").reduce((sum, account) => sum + account.currentBalance, 0), bank: activeAccounts.filter((account) => account.kind === "bank").reduce((sum, account) => sum + account.currentBalance, 0) }), [activeAccounts]);
+  const selectedRows = useMemo(() => selected ? ledger.filter((row) => row.accountId === selected.ledgerAccountId).sort((a, b) => `${a.date}:${a.voucherNumber || ""}:${a.lineId}`.localeCompare(`${b.date}:${b.voucherNumber || ""}:${b.lineId}`)) : [], [selected, ledger]);
+  const runningRows = useMemo(() => selectedRows.reduce<{ rows: (Ledger & { balance: number })[]; balance: number }>((state, row) => { const balance = state.balance + Number(row.debit || 0) - Number(row.credit || 0); state.rows.push({ ...row, balance }); return state; }, { rows: [], balance: Number(selected?.openingBalance || 0) }), [selectedRows, selected]);
+  const activeLedgerAccounts = useMemo(() => gl.filter((account) => account.active !== false), [gl]);
+
+  function closeModal() { setModal(null); setSaving(false); setError(""); }
+  function openNewAccount() { setKind("bank"); setAccountForm({ displayName: "", openingBalance: "0", openingBalanceDate: today(), bankName: "", accountNumber: "", ifscCode: "", upiId: "", accountHolderName: "" }); setModal("account"); }
+  function openEdit() {
+    if (!selected) return;
+    setKind(selected.kind);
+    setAccountForm({ displayName: selected.displayName, openingBalance: String((Number(selected.openingBalance || 0) / 100).toFixed(2)), openingBalanceDate: selected.openingBalanceDate || today(), bankName: selected.bankName || "", accountNumber: selected.accountNumber || "", ifscCode: selected.ifscCode || "", upiId: selected.upiId || "", accountHolderName: selected.accountHolderName || "" });
+    setModal("account");
+  }
+  function openTransfer() {
+    setTransferForm({ from: activeAccounts[0]?.accountId || "", to: activeAccounts[1]?.accountId || "", amount: "", date: today(), reference: "", notes: "" });
+    setModal("transfer");
+  }
+  function openEntry(type: EntryType = "deposit") {
+    setEntryType(type);
+    setEntryForm({ name: "", amount: "", date: today(), reference: "", notes: "", contra: "" });
+    setModal("entry");
+  }
+
+  async function submitAccount() {
+    if (!activeBusinessId) return;
+    try {
+      setSaving(true);
+      if (!accountForm.displayName.trim()) throw new Error("Account name is required.");
+      if (Number(accountForm.openingBalance || 0) < 0) throw new Error("Opening balance cannot be negative.");
+      if (selected && modal === "account" && accountForm.displayName === selected.displayName ? false : false) { return; }
+      const action = selected && accounts.some((account) => account.accountId === selected.accountId) && accountForm.displayName === selected.displayName && modal === "account" ? "account_update" : "account";
+      const body: Record<string, unknown> = action === "account_update"
+        ? { action, businessId: activeBusinessId, accountId: selected!.accountId, displayName: accountForm.displayName, bankName: accountForm.bankName, accountNumber: accountForm.accountNumber, ifscCode: accountForm.ifscCode, upiId: accountForm.upiId, accountHolderName: accountForm.accountHolderName }
+        : { action, businessId: activeBusinessId, kind, displayName: accountForm.displayName, openingBalance: Number(accountForm.openingBalance || 0), openingBalanceDate: accountForm.openingBalanceDate, bankName: accountForm.bankName, accountNumber: accountForm.accountNumber, ifscCode: accountForm.ifscCode, upiId: accountForm.upiId, accountHolderName: accountForm.accountHolderName };
+      await api("/api/cash-bank", body);
+      closeModal();
+      await load();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to save account."); } finally { setSaving(false); }
+  }
+
+  async function submitEntry() {
+    if (!activeBusinessId || !selected) return;
+    try {
+      setSaving(true);
+      const amount = Number(entryForm.amount);
+      const contra = activeLedgerAccounts.find((account) => account.accountId === entryForm.contra);
+      if (!entryForm.name.trim()) throw new Error("Description is required.");
+      if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a positive amount.");
+      if (!contra) throw new Error("Select a counter account.");
+      await api("/api/cash-bank", { action: "entry", businessId: activeBusinessId, financialYearId, accountId: selected.accountId, type: entryType, amount, name: entryForm.name.trim(), date: entryForm.date, reference: entryForm.reference.trim(), notes: entryForm.notes.trim(), contraAccountId: contra.accountId, idempotencyKey: `cb-${crypto.randomUUID()}` });
+      closeModal();
+      await load();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to post transaction."); } finally { setSaving(false); }
+  }
+
+  async function submitTransfer() {
+    if (!activeBusinessId) return;
+    try {
+      setSaving(true);
+      const amount = Number(transferForm.amount);
+      if (!transferForm.from || !transferForm.to || transferForm.from === transferForm.to) throw new Error("Select different source and destination accounts.");
+      if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a positive transfer amount.");
+      await api("/api/cash-bank", { action: "transfer", businessId: activeBusinessId, financialYearId, fromAccountId: transferForm.from, toAccountId: transferForm.to, amount, date: transferForm.date, reference: transferForm.reference.trim(), notes: transferForm.notes.trim(), idempotencyKey: `cb-transfer-${crypto.randomUUID()}` });
+      closeModal();
+      await load();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to post transfer."); } finally { setSaving(false); }
+  }
+
+  async function toggleStatus() {
+    if (!activeBusinessId || !selected) return;
+    try {
+      setSaving(true);
+      await api("/api/cash-bank", { action: "account_status", businessId: activeBusinessId, accountId: selected.accountId, status: selected.status === "active" ? "inactive" : "active" });
+      await load();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to change account status."); } finally { setSaving(false); }
+  }
+
+  async function reverse(voucherId: string, date: string) {
+    if (!activeBusinessId) return;
+    if (!window.confirm("Reverse this voucher? The original posting will remain in history and a controlled reversal will be created.")) return;
+    try {
+      setSaving(true);
+      await api("/api/cash-bank", { action: "reverse", businessId: activeBusinessId, voucherId, date, idempotencyKey: `cb-reversal-${crypto.randomUUID()}` });
+      await load();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to reverse voucher."); } finally { setSaving(false); }
+  }
+
+  return <AuthGate>
+    <div className="min-h-screen bg-[#f8f9fb]">
+      <div className="flex min-h-screen"><Sidebar /><main className="min-w-0 flex-1 px-4 pb-10 sm:px-6 lg:px-8"><TopNav />
+        <div className="mx-auto max-w-[1600px] py-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div><p className="text-sm font-semibold text-[#465fff]">{activeBusiness?.business.name || "Business"} · Money</p><h1 className="mt-1 text-3xl font-bold tracking-tight text-[#101828]">Cash & Bank</h1><p className="mt-1 max-w-2xl text-sm text-[#667085]">A controlled workspace for cash accounts, bank accounts, deposits, payments, transfers and reversals.</p></div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={buttonClass} disabled={loading} onClick={() => void load()}><Icon name="refresh" /> <span className="ml-2">Refresh</span></button>
+              {canCreate && <button type="button" className={buttonClass} onClick={openTransfer}><Icon name="transfer" /><span className="ml-2">Transfer</span></button>}
+              {canCreate && <button type="button" className={primaryButtonClass} onClick={openNewAccount}><Icon name="plus" /><span className="ml-2">New Account</span></button>}
+            </div>
+          </div>
+
+          {error && <div className="mt-4 flex items-start justify-between gap-3 rounded-xl border border-[#fecdca] bg-[#fef3f2] px-4 py-3 text-sm text-[#b42318]"><span>{error}</span><button type="button" onClick={() => setError("")} className="font-bold">×</button></div>}
+
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <SummaryCard title="Total liquidity" value={money(totals.cash + totals.bank)} subtitle="Active cash + bank" icon="bank" />
+            <SummaryCard title="Cash in hand" value={money(totals.cash)} subtitle={`${activeAccounts.filter((a) => a.kind === "cash").length} active account(s)`} icon="cash" />
+            <SummaryCard title="Bank balance" value={money(totals.bank)} subtitle={`${activeAccounts.filter((a) => a.kind === "bank").length} active account(s)`} icon="bank" />
+          </div>
+
+          <section className="mt-6 overflow-hidden rounded-xl border border-[#e4e7ec] bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#eaecf0] px-5 py-4">
+              <div><h2 className="font-bold text-[#101828]">Accounts</h2><p className="mt-0.5 text-xs text-[#98a2b3]">Financial year {financialYearId || "—"} · {accounts.length} shown</p></div>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-xs font-medium text-[#667085]"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />Show inactive</label>
+                <div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#98a2b3]"><Icon name="search" /></span><input className={`${inputClass} h-9 w-64 pl-9`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search account, bank or number" /></div>
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-[390px_1fr]">
+              <aside className="border-b border-[#eaecf0] lg:border-b-0 lg:border-r">
+                {loading ? <div className="space-y-3 p-5">{[1,2,3].map((item) => <div key={item} className="h-20 animate-pulse rounded-lg bg-[#f2f4f7]" />)}</div> : filteredAccounts.length === 0 ? <div className="p-10 text-center"><p className="text-sm font-semibold text-[#344054]">No accounts found</p><p className="mt-1 text-xs text-[#98a2b3]">Create a cash or bank account to start posting.</p></div> : <div className="divide-y divide-[#eaecf0]">{filteredAccounts.map((account) => <button key={account.accountId} type="button" onClick={() => setSelected(account)} className={`w-full p-5 text-left transition hover:bg-[#f9fafb] ${selected?.accountId === account.accountId ? "bg-[#f5f7ff]" : ""}`}><div className="flex items-start gap-3"><span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${account.kind === "cash" ? "bg-[#ecfdf3] text-[#039855]" : "bg-[#edf2ff] text-[#465fff]"}`}><Icon name={account.kind} /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-sm font-bold text-[#344054]">{account.displayName}</span><span className={`text-[11px] font-semibold ${account.status === "active" ? "text-[#039855]" : "text-[#98a2b3]"}`}>{account.status}</span></span><span className="mt-1 block truncate text-xs text-[#667085]">{account.kind === "bank" ? [account.bankName, account.accountNumber].filter(Boolean).join(" · ") || "Bank details not provided" : "Cash account"}</span><span className="mt-2 block text-lg font-bold text-[#101828]">{money(account.currentBalance)}</span></span></div></button>)}</div>}
+              </aside>
+
+              <div className="min-h-[620px]">
+                {!selected ? <div className="flex min-h-[620px] items-center justify-center p-10 text-center"><div><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f2f4f7] text-[#667085]"><Icon name="bank" /></div><h3 className="mt-4 text-sm font-bold text-[#101828]">Select an account</h3><p className="mt-1 text-xs text-[#667085]">View its accounting balance, quick actions and ledger.</p></div></div> : <>
+                  <div className="border-b border-[#eaecf0] px-5 py-5"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2"><h3 className="text-xl font-bold text-[#101828]">{selected.displayName}</h3><span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${selected.status === "active" ? "bg-[#ecfdf3] text-[#027a48]" : "bg-[#f2f4f7] text-[#667085]"}`}>{selected.status}</span></div><p className="mt-1 text-xs text-[#667085]">{selected.kind.toUpperCase()} · Ledger {selected.ledgerAccountId}</p>{selected.kind === "bank" && <p className="mt-1 text-xs text-[#98a2b3]">{[selected.bankName, selected.accountNumber, selected.ifscCode].filter(Boolean).join(" · ") || "Bank details not provided"}</p>}</div><div className="flex flex-wrap gap-2">{canCreate && selected.status === "active" && <><button type="button" className={buttonClass} onClick={() => openEntry("deposit")}>Receive / Deposit</button><button type="button" className={buttonClass} onClick={() => openEntry("withdrawal")}>Pay / Withdraw</button></>}{canEdit && <button type="button" className={buttonClass} onClick={openEdit}><Icon name="edit" /><span className="ml-2">Edit</span></button>}{canEdit && <button type="button" disabled={saving} className={buttonClass} onClick={() => void toggleStatus()}><Icon name="power" /><span className="ml-2">{selected.status === "active" ? "Deactivate" : "Activate"}</span></button>}</div></div></div>
+
+                  <div className="grid grid-cols-2 border-b border-[#eaecf0] sm:grid-cols-4"><Metric title="Opening" value={money(selected.openingBalance || 0)} /><Metric title="Current balance" value={money(selected.currentBalance)} strong /><Metric title="Ledger status" value={selected.ledgerHealthy ? "Healthy" : "Check link"} tone={selected.ledgerHealthy ? "good" : "bad"} /><Metric title="Last activity" value={selectedRows[0]?.date || "—"} /></div>
+
+                  {selected.status === "active" && !selected.ledgerHealthy && <div className="mx-5 mt-4 rounded-lg border border-[#fecdca] bg-[#fef3f2] px-4 py-3 text-xs font-semibold text-[#b42318]">This account is linked to an unhealthy ledger account. Posting actions should be repaired before use.</div>}
+
+                  <div className="p-5"><div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><h4 className="font-bold text-[#101828]">Account ledger</h4><p className="mt-0.5 text-xs text-[#98a2b3]">Latest financial-year entries · balances are derived from the accounting ledger.</p></div>{canCreate && <button type="button" className={primaryButtonClass} onClick={openTransfer}><Icon name="transfer" /><span className="ml-2">Transfer Funds</span></button>}</div>
+                    {runningRows.rows.length === 0 ? <div className="rounded-xl border border-dashed border-[#d0d5dd] p-12 text-center"><p className="text-sm font-semibold text-[#344054]">No ledger activity</p><p className="mt-1 text-xs text-[#98a2b3]">Post a receipt, payment or transfer to see activity here.</p></div> : <div className="overflow-x-auto rounded-xl border border-[#eaecf0]"><table className="w-full min-w-[850px] text-sm"><thead className="bg-[#f9fafb] text-xs uppercase tracking-wide text-[#667085]"><tr><th className="px-3 py-3 text-left">Date</th><th className="px-3 py-3 text-left">Voucher</th><th className="px-3 py-3 text-left">Description</th><th className="px-3 py-3 text-right">Debit</th><th className="px-3 py-3 text-right">Credit</th><th className="px-3 py-3 text-right">Balance</th><th className="px-3 py-3" /></tr></thead><tbody className="divide-y divide-[#eaecf0]">{runningRows.rows.map((row) => <tr key={row.lineId} className="hover:bg-[#fcfcfd]"><td className="px-3 py-3 whitespace-nowrap">{row.date}</td><td className="px-3 py-3 whitespace-nowrap font-semibold">{row.voucherNumber || row.voucherId}</td><td className="px-3 py-3">{row.description || row.voucherType || "—"}</td><td className="px-3 py-3 text-right">{row.debit ? money(row.debit) : "—"}</td><td className="px-3 py-3 text-right">{row.credit ? money(row.credit) : "—"}</td><td className="px-3 py-3 text-right font-bold">{money(row.balance)}</td><td className="px-3 py-3 text-right">{canEdit && !String(row.voucherType || "").toLowerCase().includes("reversal") && <button type="button" onClick={() => void reverse(row.voucherId, row.date)} className="inline-flex items-center gap-1 rounded-md border border-[#fecdca] px-2 py-1 text-xs font-semibold text-[#b42318] hover:bg-[#fef3f2]"><Icon name="undo" />Reverse</button>}</td></tr>)}</tbody></table></div>}
+                  </div>
+                </>}
+              </div>
+            </div>
+          </section>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3"><InfoCard title="Accounting" text="Every receipt, payment and transfer posts through the canonical double-entry voucher engine." /><InfoCard title="Control" text="Inactive accounts cannot be posted to, and reversals create a new accounting document instead of mutating history." /><InfoCard title="Money units" text="The UI accepts rupees; the accounting layer stores monetary values in minor units." /></div>
+        </div>
+      </main></div>
+
+      {modal === "account" && <ModalShell title={selected && accounts.some((account) => account.accountId === selected.accountId) ? "Edit Account" : "New Cash / Bank Account"} subtitle="Master data and opening balance" onClose={closeModal} footer={<><button type="button" className={buttonClass} onClick={closeModal}>Cancel</button><button type="button" disabled={saving} className={primaryButtonClass} onClick={() => void submitAccount()}>{saving ? "Saving…" : selected && accounts.some((account) => account.accountId === selected.accountId) ? "Save Changes" : "Create Account"}</button></>}>
+        {!selected || !accounts.some((account) => account.accountId === selected.accountId) ? <div className="mb-5 flex rounded-lg bg-[#f2f4f7] p-1"><button type="button" className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${kind === "cash" ? "bg-white shadow-sm text-[#101828]" : "text-[#667085]"}`} onClick={() => setKind("cash")}>Cash Account</button><button type="button" className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${kind === "bank" ? "bg-white shadow-sm text-[#101828]" : "text-[#667085]"}`} onClick={() => setKind("bank")}>Bank Account</button></div> : null}
+        <div className="grid gap-4 sm:grid-cols-2"><Field label="Account name"><input className={inputClass} value={accountForm.displayName} onChange={(e) => setAccountForm((v) => ({ ...v, displayName: e.target.value }))} placeholder={kind === "cash" ? "Cash Counter" : "HDFC Current Account"} /></Field><Field label="Opening balance" hint="Enter in rupees"><input type="number" min="0" step="0.01" className={inputClass} value={accountForm.openingBalance} disabled={!!selected && accounts.some((account) => account.accountId === selected.accountId)} onChange={(e) => setAccountForm((v) => ({ ...v, openingBalance: e.target.value }))} /></Field><Field label="Opening balance date"><input type="date" className={inputClass} value={accountForm.openingBalanceDate} disabled={!!selected && accounts.some((account) => account.accountId === selected.accountId)} onChange={(e) => setAccountForm((v) => ({ ...v, openingBalanceDate: e.target.value }))} /></Field>{kind === "bank" && <><Field label="Bank name"><input className={inputClass} value={accountForm.bankName} onChange={(e) => setAccountForm((v) => ({ ...v, bankName: e.target.value }))} /></Field><Field label="Account number"><input className={inputClass} value={accountForm.accountNumber} onChange={(e) => setAccountForm((v) => ({ ...v, accountNumber: e.target.value }))} /></Field><Field label="IFSC"><input className={inputClass} value={accountForm.ifscCode} onChange={(e) => setAccountForm((v) => ({ ...v, ifscCode: e.target.value.toUpperCase() }))} /></Field><Field label="UPI ID"><input className={inputClass} value={accountForm.upiId} onChange={(e) => setAccountForm((v) => ({ ...v, upiId: e.target.value }))} /></Field><Field label="Account holder"><input className={inputClass} value={accountForm.accountHolderName} onChange={(e) => setAccountForm((v) => ({ ...v, accountHolderName: e.target.value }))} /></Field></>}</div>
+      </ModalShell>}
+
+      {modal === "entry" && selected && <ModalShell title={entryType === "deposit" ? "Receive / Deposit" : "Pay / Withdraw"} subtitle={`${selected.displayName} · Financial year ${financialYearId || "—"}`} onClose={closeModal} footer={<><button type="button" className={buttonClass} onClick={closeModal}>Cancel</button><button type="button" disabled={saving || !selected.ledgerHealthy} className={primaryButtonClass} onClick={() => void submitEntry()}>{saving ? "Posting…" : entryType === "deposit" ? "Post Receipt" : "Post Payment"}</button></>}>
+        <div className="mb-5 flex rounded-lg bg-[#f2f4f7] p-1"><button type="button" className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${entryType === "deposit" ? "bg-white shadow-sm text-[#101828]" : "text-[#667085]"}`} onClick={() => setEntryType("deposit")}>Receive / Deposit</button><button type="button" className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${entryType === "withdrawal" ? "bg-white shadow-sm text-[#101828]" : "text-[#667085]"}`} onClick={() => setEntryType("withdrawal")}>Pay / Withdraw</button></div>
+        <div className="grid gap-4 sm:grid-cols-2"><Field label="Description"><input className={inputClass} value={entryForm.name} onChange={(e) => setEntryForm((v) => ({ ...v, name: e.target.value }))} placeholder={entryType === "deposit" ? "Customer receipt" : "Office expense payment"} /></Field><Field label="Amount" hint="Enter in rupees"><input type="number" min="0.01" step="0.01" className={inputClass} value={entryForm.amount} onChange={(e) => setEntryForm((v) => ({ ...v, amount: e.target.value }))} /></Field><Field label="Date"><input type="date" className={inputClass} value={entryForm.date} onChange={(e) => setEntryForm((v) => ({ ...v, date: e.target.value }))} /></Field><Field label="Counter account"><select className={inputClass} value={entryForm.contra} onChange={(e) => setEntryForm((v) => ({ ...v, contra: e.target.value }))}><option value="">Select account</option>{activeLedgerAccounts.filter((account) => account.accountId !== selected.ledgerAccountId).map((account) => <option key={account.accountId} value={account.accountId}>{account.name}</option>)}</select></Field><Field label="Reference"><input className={inputClass} value={entryForm.reference} onChange={(e) => setEntryForm((v) => ({ ...v, reference: e.target.value }))} placeholder="Cheque / UTR / reference" /></Field><Field label="Notes"><input className={inputClass} value={entryForm.notes} onChange={(e) => setEntryForm((v) => ({ ...v, notes: e.target.value }))} placeholder="Optional note" /></Field></div>
+      </ModalShell>}
+
+      {modal === "transfer" && <ModalShell title="Transfer Funds" subtitle="Move money between active cash and bank accounts" onClose={closeModal} width="max-w-xl" footer={<><button type="button" className={buttonClass} onClick={closeModal}>Cancel</button><button type="button" disabled={saving} className={primaryButtonClass} onClick={() => void submitTransfer()}>{saving ? "Posting…" : "Post Transfer"}</button></>}>
+        <div className="mb-5 rounded-xl border border-[#e4e7ec] bg-[#f9fafb] p-4"><div className="flex items-center justify-between gap-3 text-xs font-semibold text-[#667085]"><span>Source</span><Icon name="arrow" /><span>Destination</span></div></div>
+        <div className="grid gap-4 sm:grid-cols-2"><Field label="From account"><select className={inputClass} value={transferForm.from} onChange={(e) => setTransferForm((v) => ({ ...v, from: e.target.value }))}><option value="">Select source</option>{activeAccounts.map((account) => <option key={account.accountId} value={account.accountId}>{account.displayName} · {money(account.currentBalance)}</option>)}</select></Field><Field label="To account"><select className={inputClass} value={transferForm.to} onChange={(e) => setTransferForm((v) => ({ ...v, to: e.target.value }))}><option value="">Select destination</option>{activeAccounts.map((account) => <option key={account.accountId} value={account.accountId}>{account.displayName}</option>)}</select></Field><Field label="Amount" hint="Enter in rupees"><input type="number" min="0.01" step="0.01" className={inputClass} value={transferForm.amount} onChange={(e) => setTransferForm((v) => ({ ...v, amount: e.target.value }))} /></Field><Field label="Date"><input type="date" className={inputClass} value={transferForm.date} onChange={(e) => setTransferForm((v) => ({ ...v, date: e.target.value }))} /></Field><Field label="Reference"><input className={inputClass} value={transferForm.reference} onChange={(e) => setTransferForm((v) => ({ ...v, reference: e.target.value }))} placeholder="UTR / transfer reference" /></Field><Field label="Notes"><input className={inputClass} value={transferForm.notes} onChange={(e) => setTransferForm((v) => ({ ...v, notes: e.target.value }))} placeholder="Optional note" /></Field></div>
+      </ModalShell>}
+    </div>
+  </AuthGate>;
+}
+
+function SummaryCard({ title, value, subtitle, icon }: { title: string; value: string; subtitle: string; icon: "cash" | "bank" }) {
+  return <article className="rounded-xl border border-[#e4e7ec] bg-white p-5 shadow-sm"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#98a2b3]">{title}</p><p className="mt-2 text-2xl font-bold tracking-tight text-[#101828]">{value}</p><p className="mt-1 text-xs text-[#667085]">{subtitle}</p></div><span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#f2f4f7] text-[#465fff]"><Icon name={icon} /></span></div></article>;
+}
+
+function Metric({ title, value, strong, tone }: { title: string; value: string; strong?: boolean; tone?: "good" | "bad" }) {
+  const toneClass = tone === "good" ? "text-[#027a48]" : tone === "bad" ? "text-[#b42318]" : "text-[#101828]";
+  return <div className="border-r border-[#eaecf0] p-4 last:border-r-0"><p className="text-[11px] font-semibold uppercase tracking-wide text-[#98a2b3]">{title}</p><p className={`${strong ? "mt-1 text-lg" : "mt-1 text-sm"} font-bold ${toneClass}`}>{value}</p></div>;
+}
+
+function InfoCard({ title, text }: { title: string; text: string }) {
+  return <article className="rounded-xl border border-[#e4e7ec] bg-white px-5 py-4 shadow-sm"><p className="text-sm font-bold text-[#101828]">{title}</p><p className="mt-1 text-xs leading-5 text-[#667085]">{text}</p></article>;
+}
