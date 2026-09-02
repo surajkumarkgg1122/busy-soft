@@ -27,6 +27,7 @@ export const navigation: NavigationItem[] = [
       { label: "Stock Valuation", href: "/inventory/valuation" },
       { label: "Manufacturing / BOM", href: "/items/manufacturing" },
       { label: "Production Entry", href: "/production" },
+      { label: "Production Register", href: "/production/register" },
     ],
   },
   {
