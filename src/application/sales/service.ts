@@ -9,7 +9,7 @@ export interface SalesApplicationDeps { repo: AccountingRepository; ids:{next(pr
 export interface CreateSaleContext { businessId:string; userId:string; financialYearId:string; idempotencyKey:string; permissions:AccountingPermission[]; role?:string; }
 export interface CreateSaleItem { itemId:string; quantity:number; warehouseId?:string; }
 export interface CreateSaleInput { date:string; customerId?:string; paymentMode:"cash"|"bank"|"credit"; grossValue:Money; discountPercent?:number; discountAmount?:Money; paidAmount?:Money; bankAccountId?:string; taxRate:number; intraState:boolean; cessRate?:number; accountMap:Record<string,string|undefined>; itemMovements:CreateSaleItem[]; narration?:string; documentId?:string; documentPayload?:Record<string,unknown>; }
-export interface SalesWorkspaceData { customers: Record<string, unknown>[]; items: Record<string, unknown>[]; sales: Record<string, unknown>[]; }
+export interface SalesWorkspaceData { customers: Record<string, unknown>[]; items: Record<string, unknown>[]; sales: Record<string, unknown>[]; bankAccounts: Record<string, unknown>[]; }
 
 function currentFinancialYearId(date:string): string {
   const year = Number(date.slice(0, 4));
@@ -27,11 +27,7 @@ export async function getSalesWorkspaceData(businessId:string): Promise<SalesWor
   if (!businessId) throw new ValidationError("Business ID is required.");
   if (typeof window === "undefined") throw new ValidationError("Sales workspace data must be requested from the application client.");
   const token = await getAuthToken();
-  const response = await fetch(`/api/accounting/sales/data?businessId=${encodeURIComponent(businessId)}`, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
+  const response = await fetch(`/api/accounting/sales/data?businessId=${encodeURIComponent(businessId)}`, { method:"GET", headers:{Authorization:`Bearer ${token}`}, cache:"no-store" });
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.success) throw new ValidationError(String(payload?.error ?? `Sales workspace failed (${response.status}).`));
   return payload.data as SalesWorkspaceData;
@@ -50,7 +46,7 @@ export async function createSale(deps:SalesApplicationDeps,ctx:CreateSaleContext
   if(!ctx.idempotencyKey)throw new ValidationError("Idempotency key is required.");
   if(typeof window!=="undefined")return createSaleFromBrowser(ctx,input);
   assertTrustedPostingBoundary(ctx);assertAuthorized(ctx,"SALE_CREATE");
-  if(input.paymentMode==="bank"&&!input.bankAccountId&&((input.paidAmount??0)>0))throw new ValidationError("Bank account is required for bank/online payment.");
+  if(input.paymentMode==="bank"&&(input.paidAmount??0)>0&&!input.bankAccountId)throw new ValidationError("Bank account is required for bank/online payment.");
   return postSaleEntry(deps.repo,{...input,accountMap:{party:input.accountMap.party!,sales:input.accountMap.sales!,cash:input.accountMap.cash,bank:input.accountMap.bank,outputCgst:input.accountMap.outputCgst,outputSgst:input.accountMap.outputSgst,outputIgst:input.accountMap.outputIgst,outputCess:input.accountMap.outputCess,inventory:input.accountMap.inventory!,cogs:input.accountMap.cogs!},idempotencyKey:ctx.idempotencyKey,businessId:ctx.businessId,userId:ctx.userId,financialYearId:ctx.financialYearId},deps);
 }
 
