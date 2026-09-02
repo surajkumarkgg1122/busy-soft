@@ -57,6 +57,7 @@ describe("cash bank accounting",()=>{
     const lines=await s.repo.getVoucherLines(a.voucher.id);
     expect(lines.find(l=>l.accountId==="acct-debtors")?.partyId).toBe("CUST-001");
     expect(lines.find(l=>l.accountId==="bank-a")?.debit).toBe(10000);
+    expect(a.ledgerEntries.find(l=>l.accountId==="bank-a")?.financialYearId).toBe(s.financialYearId);
     expect(s.repo.businessDocuments.get("bankAccounts/bank-a")?.currentBalance).toBe(110000);
   });
 
@@ -81,6 +82,8 @@ describe("cash bank accounting",()=>{
     expect(lines.find(l=>l.accountId==="bank-a")?.credit).toBe(2500);
     expect(lines.find(l=>l.accountId==="bank-b")?.debit).toBe(2500);
     expect(result.voucher.voucherType).toBe("CONTRA");
+    expect(result.ledgerEntries.filter(l=>l.accountId==="bank-a")[0]?.financialYearId).toBe(s.financialYearId);
+    expect(result.ledgerEntries.filter(l=>l.accountId==="bank-b")[0]?.financialYearId).toBe(s.financialYearId);
     expect(s.repo.businessDocuments.get("bankAccounts/bank-a")?.currentBalance).toBe(97500);
     expect(s.repo.businessDocuments.get("bankAccounts/bank-b")?.currentBalance).toBe(52500);
   });
@@ -109,6 +112,7 @@ describe("cash bank accounting",()=>{
     const posted=await postCashBankEntry(s.repo,{businessId:s.businessId,financialYearId:s.financialYearId,date:"2026-09-01",userId:"u1",idempotencyKey:"cb-reversal-original",accountId:"bank-a",ledgerAccountId:"bank-a",type:"deposit",amount:10000,contraAccountId:"expense",narration:"Deposit"},depsFrom(s));
     const reversal=await reversePostedVoucher(s.repo,{businessId:s.businessId,financialYearId:s.financialYearId,voucherId:posted.voucher.id,userId:"u2",idempotencyKey:"cb-reversal-123456",date:"2026-09-02"},depsFrom(s));
     expect(reversal.voucher.voucherType).toBe("RECEIPT_REVERSAL");
+    expect(reversal.ledgerEntries.find(l=>l.accountId==="bank-a")?.financialYearId).toBe(s.financialYearId);
     expect(s.repo.vouchers.get(posted.voucher.id)?.status).toBe("cancelled");
     const reverseLines=await s.repo.getVoucherLines(reversal.voucher.id);
     expect(reverseLines.find(l=>l.accountId==="bank-a")?.credit).toBe(10000);
