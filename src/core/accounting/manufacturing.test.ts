@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateManufacturingCost, validateManufacturingConfig } from "./manufacturing";
+import { buildProductionConsumption, calculateManufacturingCost, validateManufacturingConfig } from "./manufacturing";
 
 describe("manufacturing costing", () => {
   const config = { enabled: true, batchQuantity: 100, bom: [{ itemId: "raw", quantity: 2 }], costComponents: [
@@ -22,6 +22,12 @@ describe("manufacturing costing", () => {
   it("includes BOM scrap in material consumption", () => {
     const result = calculateManufacturingCost({ config: { ...config, bom: [{ itemId: "raw", quantity: 2, scrapPercent: 10 }] }, materialUnitCosts: { raw: 50 } });
     expect(result.materialCost).toBe(11000);
+  });
+
+  it("scales consumption by finished output when process wastage exists", () => {
+    const wastageConfig = { ...config, wastagePercent: 10, bom: [{ itemId: "raw", quantity: 2, scrapPercent: 5 }] };
+    const consumption = buildProductionConsumption(wastageConfig, 45);
+    expect(consumption[0].quantity).toBeCloseTo(105, 8);
   });
 
   it("rejects duplicate BOM components", () => {
