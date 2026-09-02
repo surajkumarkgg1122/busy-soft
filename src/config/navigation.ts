@@ -25,6 +25,8 @@ export const navigation: NavigationItem[] = [
       { label: "Batch / Expiry", href: "/inventory/batch-expiry" },
       { label: "Serial Numbers", href: "/inventory/serial-numbers" },
       { label: "Stock Valuation", href: "/inventory/valuation" },
+      { label: "Manufacturing / BOM", href: "/items/manufacturing" },
+      { label: "Production Entry", href: "/production" },
     ],
   },
   {
