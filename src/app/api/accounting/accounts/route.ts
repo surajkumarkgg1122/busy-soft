@@ -1,0 +1,10 @@
+import { NextResponse } from "next/server";
+import type { Firestore } from "firebase-admin/firestore";
+import { getAdminServices } from "@/infrastructure/firebase/admin";
+import type { BusinessMember } from "@/types";
+
+export const runtime="nodejs";
+const fail=(error:string,status=400)=>NextResponse.json({success:false,error},{status});
+async function auth(request:Request){const{auth,db}=getAdminServices();const h=request.headers.get("authorization")||"";if(!h.startsWith("Bearer "))throw Object.assign(new Error("Authentication is required."),{statusCode:401});return{db,token:await auth.verifyIdToken(h.slice(7))};}
+async function member(db:Firestore,businessId:string,uid:string){const s=await db.collection("businesses").doc(businessId).collection("members").doc(uid).get();if(!s.exists)throw Object.assign(new Error("You are not a member of this business."),{statusCode:403});const m=s.data() as BusinessMember;if(m.status!=="active")throw Object.assign(new Error("Your business membership is not active."),{statusCode:403});return m;}
+export async function GET(request:Request){try{const{db,token}=await auth(request);const u=new URL(request.url);const businessId=u.searchParams.get("businessId")?.trim()||"";if(!businessId)return fail("Business ID is required.");const m=await member(db,businessId,token.uid);const canView=m.role==="owner"||m.role==="admin"||!!m.permissions?.inventory?.view||!!m.permissions?.items?.view;if(!canView)return fail("Permission denied: account view.",403);const type=(u.searchParams.get("type")||"").trim();const ref=db.collection("businesses").doc(businessId).collection("accounts");const snap=await ref.get();const accounts=snap.docs.map(d=>({id:d.id,...d.data()})).filter((a)=>a.active!==false&&(!type||a.type===type)).sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));return NextResponse.json({success:true,accounts});}catch(e){return fail(e instanceof Error?e.message:"Could not load accounts.",(e as{statusCode?:number}).statusCode||400);}}
