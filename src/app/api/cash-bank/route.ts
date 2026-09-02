@@ -51,36 +51,31 @@ function normalizeLedgerRow(row: any, fallback: Record<string, unknown> = {}) {
   };
 }
 
-/**
- * The ledgerEntries collection is the canonical history. For old/partially migrated
- * data, voucherLines can still prove that a Cash/Bank voucher exists. This fallback
- * keeps the UI truthful instead of showing "No ledger activity" when the voucher and
- * its accounting lines are already present.
- */
 async function buildCashBankLedger(db: any, ref: any, financialYearId: string, ledgerAccountIds: string[]) {
   const ledgerSnapshot = await ref.collection("ledgerEntries").where("financialYearId", "==", financialYearId).get();
   const canonical = ledgerSnapshot.docs
     .map((doc: any) => normalizeLedgerRow({ lineId: doc.id, ...doc.data() }))
     .filter((row: any) => ledgerAccountIds.includes(row.accountId));
-  if (canonical.length > 0 || ledgerAccountIds.length === 0) return { rows: canonical, source: "ledgerEntries" };
 
-  const lineSnapshots: any[] = [];
-  for (let i = 0; i < ledgerAccountIds.length; i += 30) {
-    const chunk = ledgerAccountIds.slice(i, i + 30);
+  const covered = new Set(canonical.map((row: any) => row.accountId));
+  const missingAccountIds = ledgerAccountIds.filter((id) => !covered.has(id));
+  if (!missingAccountIds.length) return { rows: canonical, source: "ledgerEntries" };
+
+  const lineDocs: any[] = [];
+  for (let i = 0; i < missingAccountIds.length; i += 30) {
+    const chunk = missingAccountIds.slice(i, i + 30);
     const snapshot = await ref.collection("voucherLines").where("accountId", "in", chunk).get();
-    lineSnapshots.push(...snapshot.docs);
+    lineDocs.push(...snapshot.docs);
   }
-  if (!lineSnapshots.length) return { rows: [], source: "ledgerEntries" };
+  if (!lineDocs.length) return { rows: canonical, source: "ledgerEntries" };
 
-  const voucherIds = [...new Set(lineSnapshots.map((doc: any) => String(doc.data()?.voucherId ?? "")).filter(Boolean))];
   const vouchers = new Map<string, any>();
-  for (let i = 0; i < voucherIds.length; i += 30) {
-    const chunk = voucherIds.slice(i, i + 30);
-    const snapshot = await ref.collection("vouchers").where("financialYearId", "==", financialYearId).where("id", "in", chunk).get().catch(() => null);
-    if (snapshot) for (const doc of snapshot.docs) vouchers.set(doc.id, { id: doc.id, ...doc.data() });
-  }
+  await Promise.all([...new Set(lineDocs.map((doc: any) => String(doc.data()?.voucherId ?? "")).filter(Boolean))].map(async (voucherId) => {
+    const snap = await ref.collection("vouchers").doc(voucherId).get();
+    if (snap.exists && String(snap.data()?.financialYearId ?? "") === financialYearId) vouchers.set(voucherId, { id: snap.id, ...snap.data() });
+  }));
 
-  const rows = lineSnapshots.map((doc: any) => {
+  const fallback = lineDocs.map((doc: any) => {
     const line = doc.data() ?? {};
     const voucher = vouchers.get(String(line.voucherId ?? ""));
     return normalizeLedgerRow({ lineId: doc.id, ...line }, {
@@ -93,8 +88,10 @@ async function buildCashBankLedger(db: any, ref: any, financialYearId: string, l
       description: line.description ?? voucher?.narration,
     });
   }).filter((row: any) => row.voucherId && row.voucherType.toUpperCase() !== "OPENING");
-  rows.sort((a: any, b: any) => `${a.date}:${a.voucherNumber}:${a.lineId}`.localeCompare(`${b.date}:${b.voucherNumber}:${b.lineId}`));
-  return { rows, source: "voucherLines-fallback" };
+
+  const merged = [...canonical, ...fallback];
+  merged.sort((a: any, b: any) => `${a.date}:${a.voucherNumber}:${a.lineId}`.localeCompare(`${b.date}:${b.voucherNumber}:${b.lineId}`));
+  return { rows: merged, source: fallback.length ? "ledgerEntries+voucherLines-fallback" : "ledgerEntries" };
 }
 
 export async function GET(request: Request) {
