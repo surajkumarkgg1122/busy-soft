@@ -39,7 +39,7 @@ export async function createCashBankAccount(repo: AccountingRepository, input: C
 
     let openingVoucher: Voucher | undefined;
     let openingLines: VoucherLine[] = [];
-    let openingLedgerEntries: VoucherLine[] = [];
+    let openingLedgerEntries: Array<VoucherLine & { financialYearId: string; date: string; voucherType: string; voucherNumber: string; createdAt: string }> = [];
     let openingVoucherId: string | undefined;
     const now = deps.clock.now();
 
@@ -57,7 +57,7 @@ export async function createCashBankAccount(repo: AccountingRepository, input: C
         : [dr("acct-opening-balance", input.openingBalance, { description: "Opening balance adjustment" }), cr(input.ledgerAccountId, input.openingBalance, { description: `Opening balance for ${input.displayName.trim()}` })];
       openingLines = rawLines.map((line, index) => ({ ...line, lineId: deps.ids.next("line"), voucherId, businessId: input.businessId, lineNo: index + 1 }));
       validateVoucherLines(openingLines);
-      openingLedgerEntries = openingLines.map(line => ({ ...line, date: input.openingBalanceDate, voucherType: "OPENING", voucherNumber, createdAt: now }));
+      openingLedgerEntries = openingLines.map(line => ({ ...line, financialYearId: input.financialYearId, date: input.openingBalanceDate, voucherType: "OPENING", voucherNumber, createdAt: now }));
       openingVoucher = { id: voucherId, businessId: input.businessId, financialYearId: input.financialYearId, voucherType: "OPENING", voucherNumber, date: input.openingBalanceDate, status: "posted", referenceType: "cash_bank_opening", referenceId: input.accountId, narration: `Opening balance for ${input.displayName.trim()}`, totalDebit: input.openingBalance, totalCredit: input.openingBalance, createdBy: input.createdBy, createdAt: now, updatedAt: now, idempotencyKey: `cashbank-opening:${input.accountId}:${input.openingBalanceDate}` };
       openingVoucherId = voucherId;
       await tx.saveBusinessDocument("voucherSequences", sequenceId, { businessId: input.businessId, financialYearId: input.financialYearId, voucherType: "OPENING", prefix: "OB", nextNumber: next + 1, updatedAt: now });
@@ -67,7 +67,7 @@ export async function createCashBankAccount(repo: AccountingRepository, input: C
     if (openingVoucher) {
       await tx.saveVoucher(openingVoucher);
       await tx.saveVoucherLines(openingLines);
-      await tx.saveLedgerEntries(openingLedgerEntries as any);
+      await tx.saveLedgerEntries(openingLedgerEntries);
       await tx.saveAtomicDocument(atomic({ id: `${openingVoucher.id}:cashbankopening`, businessId: input.businessId, financialYearId: input.financialYearId, type: "opening", voucherId: openingVoucher.id, idempotencyKey: openingVoucher.idempotencyKey!, date: input.openingBalanceDate, createdBy: input.createdBy, createdAt: now, payload: { operation: "cash_bank_opening", accountId: input.accountId, amount: input.openingBalance, balanceType: input.openingBalanceType } }));
     }
     await tx.saveBusinessDocument("bankAccounts", input.accountId, { businessId: input.businessId, accountId: input.accountId, displayName: input.displayName.trim(), kind: input.kind, ledgerAccountId: input.ledgerAccountId, openingBalance: input.openingBalance, openingBalanceType: input.openingBalanceType, openingBalanceDate: input.openingBalanceDate, currentBalance: input.openingBalanceType === "debit" ? input.openingBalance : -input.openingBalance, status: "active", ...(input.details ?? {}), createdBy: input.createdBy, createdAt: now, updatedAt: now, ...(openingVoucherId ? { openingVoucherId } : {}) });
