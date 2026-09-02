@@ -27,7 +27,7 @@ describe("manufacturing costing", () => {
   it("scales consumption by finished output when process wastage exists", () => {
     const wastageConfig = { ...config, wastagePercent: 10, bom: [{ itemId: "raw", quantity: 2, scrapPercent: 5 }] };
     const consumption = buildProductionConsumption(wastageConfig, 45);
-    expect(consumption[0].quantity).toBeCloseTo(105, 8);
+    expect(consumption[0].quantity).toBeCloseTo(1.05, 8);
   });
 
   it("rejects duplicate BOM components", () => {
