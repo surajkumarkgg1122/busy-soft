@@ -7,6 +7,40 @@
         { "fieldPath": "locked", "order": "ASCENDING" },
         { "fieldPath": "startDate", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "productionVouchers",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "financialYearId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "productionVouchers",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "businessId", "order": "ASCENDING" },
+        { "fieldPath": "itemId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "manufacturingBomVersions",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "itemId", "order": "ASCENDING" },
+        { "fieldPath": "version", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "productionPlans",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "businessId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "dueDate", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
