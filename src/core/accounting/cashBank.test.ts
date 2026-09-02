@@ -21,9 +21,9 @@ const setup=()=>{
     ["acct-creditors","Sundry Creditors","asset",0],
   ];
   for(const [id,name,type,openingDebit] of accounts) repo.accounts.set(id,{id,businessId,code:id,name,type,parentId:null,systemAccount:id.startsWith("acct-"),active:true,openingDebit,openingCredit:0,createdAt:now.now(),updatedAt:now.now()});
-  repo.businessDocuments.set("bankAccounts/bank-a",{accountId:"bank-a",businessId,displayName:"Bank A",kind:"bank",ledgerAccountId:"bank-a",status:"active",openingBalance:100000});
-  repo.businessDocuments.set("bankAccounts/bank-b",{accountId:"bank-b",businessId,displayName:"Bank B",kind:"bank",ledgerAccountId:"bank-b",status:"active",openingBalance:50000});
-  repo.businessDocuments.set("bankAccounts/cash-a",{accountId:"cash-a",businessId,displayName:"Cash",kind:"cash",ledgerAccountId:"cash-a",status:"active",openingBalance:25000});
+  repo.businessDocuments.set("bankAccounts/bank-a",{accountId:"bank-a",businessId,displayName:"Bank A",kind:"bank",ledgerAccountId:"bank-a",status:"active",openingBalance:100000,currentBalance:100000});
+  repo.businessDocuments.set("bankAccounts/bank-b",{accountId:"bank-b",businessId,displayName:"Bank B",kind:"bank",ledgerAccountId:"bank-b",status:"active",openingBalance:50000,currentBalance:50000});
+  repo.businessDocuments.set("bankAccounts/cash-a",{accountId:"cash-a",businessId,displayName:"Cash",kind:"cash",ledgerAccountId:"cash-a",status:"active",openingBalance:25000,currentBalance:25000});
   repo.businessDocuments.set("parties/CUST-001",{id:"CUST-001",businessId,name:"Customer One",kind:"customer",ledgerAccountId:"acct-debtors"});
   return{repo,now,ids,businessId,financialYearId};
 };
@@ -35,7 +35,7 @@ describe("cash bank accounting",()=>{
     const result=await createCashBankAccount(s.repo,{businessId:s.businessId,financialYearId:s.financialYearId,accountId:"bank-c",displayName:"Bank C",ledgerAccountId:"bank-c",kind:"bank",parentAccountId:"acct-bank",openingBalance:250000,openingBalanceType:"debit",openingBalanceDate:"2026-09-01",createdBy:"u1"},depsFrom(s));
     expect(result.openingVoucherId).toEqual(expect.any(String));
     expect(s.repo.accounts.get("bank-c")).toMatchObject({name:"Bank C",type:"asset",parentId:"acct-bank",openingDebit:0});
-    expect(s.repo.businessDocuments.get("bankAccounts/bank-c")).toMatchObject({displayName:"Bank C",kind:"bank",ledgerAccountId:"bank-c",status:"active",openingBalance:250000,openingBalanceType:"debit",openingVoucherId:result.openingVoucherId});
+    expect(s.repo.businessDocuments.get("bankAccounts/bank-c")).toMatchObject({displayName:"Bank C",kind:"bank",ledgerAccountId:"bank-c",status:"active",openingBalance:250000,openingBalanceType:"debit",openingVoucherId:result.openingVoucherId,currentBalance:250000});
     const opening=await s.repo.getVoucherLines(result.openingVoucherId!);
     expect(opening.find(l=>l.accountId==="bank-c")?.debit).toBe(250000);
     expect(opening.find(l=>l.accountId==="acct-opening-balance")?.credit).toBe(250000);
@@ -57,6 +57,7 @@ describe("cash bank accounting",()=>{
     const lines=await s.repo.getVoucherLines(a.voucher.id);
     expect(lines.find(l=>l.accountId==="acct-debtors")?.partyId).toBe("CUST-001");
     expect(lines.find(l=>l.accountId==="bank-a")?.debit).toBe(10000);
+    expect(s.repo.businessDocuments.get("bankAccounts/bank-a")?.currentBalance).toBe(110000);
   });
 
   it("rejects a party linked to the wrong counter account",async()=>{
@@ -70,22 +71,25 @@ describe("cash bank accounting",()=>{
     const lines=await s.repo.getVoucherLines(result.voucher.id);
     expect(lines.find(l=>l.accountId==="bank-a")?.credit).toBe(7000);
     expect(lines.find(l=>l.accountId==="expense")?.debit).toBe(7000);
+    expect(s.repo.businessDocuments.get("bankAccounts/bank-a")?.currentBalance).toBe(93000);
   });
 
-  it("posts an atomic contra transfer between cash bank ledgers",async()=>{
+  it("posts an atomic contra transfer between cash bank ledgers and updates both balances",async()=>{
     const s=setup();
     const result=await postCashBankTransfer(s.repo,{businessId:s.businessId,financialYearId:s.financialYearId,date:"2026-09-01",userId:"u1",idempotencyKey:"cb-transfer-123456",fromAccountId:"bank-a",fromLedgerAccountId:"bank-a",toAccountId:"bank-b",toLedgerAccountId:"bank-b",amount:2500},depsFrom(s));
     const lines=await s.repo.getVoucherLines(result.voucher.id);
     expect(lines.find(l=>l.accountId==="bank-a")?.credit).toBe(2500);
     expect(lines.find(l=>l.accountId==="bank-b")?.debit).toBe(2500);
     expect(result.voucher.voucherType).toBe("CONTRA");
+    expect(s.repo.businessDocuments.get("bankAccounts/bank-a")?.currentBalance).toBe(97500);
+    expect(s.repo.businessDocuments.get("bankAccounts/bank-b")?.currentBalance).toBe(52500);
   });
 
   it("preserves account master data after a transfer",async()=>{
     const s=setup();
     await postCashBankTransfer(s.repo,{businessId:s.businessId,financialYearId:s.financialYearId,date:"2026-09-01",userId:"u1",idempotencyKey:"cb-transfer-master-1234",fromAccountId:"bank-a",fromLedgerAccountId:"bank-a",toAccountId:"bank-b",toLedgerAccountId:"bank-b",amount:2500},depsFrom(s));
-    expect(s.repo.businessDocuments.get("bankAccounts/bank-a")).toMatchObject({displayName:"Bank A",kind:"bank",ledgerAccountId:"bank-a",status:"active",lastVoucherId:expect.any(String)});
-    expect(s.repo.businessDocuments.get("bankAccounts/bank-b")).toMatchObject({displayName:"Bank B",kind:"bank",ledgerAccountId:"bank-b",status:"active",lastVoucherId:expect.any(String)});
+    expect(s.repo.businessDocuments.get("bankAccounts/bank-a")).toMatchObject({displayName:"Bank A",kind:"bank",ledgerAccountId:"bank-a",status:"active",lastVoucherId:expect.any(String),currentBalance:97500});
+    expect(s.repo.businessDocuments.get("bankAccounts/bank-b")).toMatchObject({displayName:"Bank B",kind:"bank",ledgerAccountId:"bank-b",status:"active",lastVoucherId:expect.any(String),currentBalance:52500});
   });
 
   it("rejects inactive source or destination",async()=>{
