@@ -22,16 +22,23 @@ export async function createCashBankAccount(repo:AccountingRepository,input:Cash
   if(!/^\d{4}-\d{2}-\d{2}$/.test(input.openingBalanceDate))throw new ValidationError("Opening balance date must be YYYY-MM-DD.");
   if(!input.accountId||!input.ledgerAccountId||!input.parentAccountId)throw new ValidationError("Account identifiers are required.");
   return repo.runInTransaction(async tx=>{
-    if(await tx.getBusinessDocument("bankAccounts",input.accountId))throw new ValidationError("Cash/bank account already exists.");
-    const fy=await tx.getFinancialYear(input.financialYearId);if(!fy||fy.businessId!==input.businessId||fy.locked)throw new ValidationError("Active financial year is required for cash/bank account creation.");
+    // Firestore requires all reads to complete before the first transaction write.
+    const existing=await tx.getBusinessDocument("bankAccounts",input.accountId);
+    if(existing)throw new ValidationError("Cash/bank account already exists.");
+    const fy=await tx.getFinancialYear(input.financialYearId);
+    if(!fy||fy.businessId!==input.businessId||fy.locked)throw new ValidationError("Active financial year is required for cash/bank account creation.");
     if(input.openingBalanceDate<fy.startDate||input.openingBalanceDate>fy.endDate)throw new ValidationError(`Opening balance date ${input.openingBalanceDate} is outside the financial year ${fy.startDate} to ${fy.endDate}.`);
-    const parent=await tx.getAccount(input.parentAccountId);if(!parent||parent.businessId!==input.businessId||parent.type!=="asset"||!parent.active)throw new ValidationError("Cash/Bank parent account is not configured.");
-    const existingLedger=await tx.getAccount(input.ledgerAccountId);if(existingLedger)throw new ValidationError("Cash/bank ledger account already exists.");
+    const parent=await tx.getAccount(input.parentAccountId);
+    if(!parent||parent.businessId!==input.businessId||parent.type!=="asset"||!parent.active)throw new ValidationError("Cash/Bank parent account is not configured.");
+    const existingLedger=await tx.getAccount(input.ledgerAccountId);
+    if(existingLedger)throw new ValidationError("Cash/bank ledger account already exists.");
+    const openingAccount=input.openingBalance>0?await tx.getAccount("acct-opening-balance"):null;
+    if(input.openingBalance>0&&(!openingAccount||openingAccount.businessId!==input.businessId||openingAccount.type!=="equity"||!openingAccount.active))throw new ValidationError("Opening balance adjustment account is not configured.");
+
     const now=deps.clock.now();
     await tx.saveAccount({id:input.ledgerAccountId,businessId:input.businessId,code:`CB-${input.accountId.slice(-12)}`,name:input.displayName.trim(),type:"asset",parentId:input.parentAccountId,systemAccount:false,active:true,openingDebit:0,openingCredit:0,createdAt:now,updatedAt:now});
     let openingVoucherId:string|undefined;
     if(input.openingBalance>0){
-      const openingAccount=await tx.getAccount("acct-opening-balance");if(!openingAccount||openingAccount.businessId!==input.businessId||openingAccount.type!=="equity"||!openingAccount.active)throw new ValidationError("Opening balance adjustment account is not configured.");
       const lines:VoucherLineInput[]=input.openingBalanceType==="debit"?[dr(input.ledgerAccountId,input.openingBalance,{description:`Opening balance for ${input.displayName.trim()}`}),cr("acct-opening-balance",input.openingBalance,{description:"Opening balance adjustment"})]:[dr("acct-opening-balance",input.openingBalance,{description:"Opening balance adjustment"}),cr(input.ledgerAccountId,input.openingBalance,{description:`Opening balance for ${input.displayName.trim()}`})];
       const key=`cashbank-opening:${input.accountId}:${input.openingBalanceDate}`;const result=await postIdempotentVoucher(tx,{businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"OPENING",prefix:"OB",date:input.openingBalanceDate,narration:`Opening balance for ${input.displayName.trim()}`,referenceType:"cash_bank_opening",referenceId:input.accountId,createdBy:input.createdBy,lines,idempotencyKey:key},deps);openingVoucherId=result.voucher.id;
       await tx.saveAtomicDocument(atomic({id:`${result.voucher.id}:cashbankopening`,businessId:input.businessId,financialYearId:input.financialYearId,type:"opening",voucherId:result.voucher.id,idempotencyKey:key,date:input.openingBalanceDate,createdBy:input.createdBy,createdAt:now,payload:{operation:"cash_bank_opening",accountId:input.accountId,amount:input.openingBalance,balanceType:input.openingBalanceType}}));
