@@ -108,8 +108,9 @@ export function calculateManufacturingCost(input: { config: ManufacturingConfig;
   return { ...costs, materialCost, totalCost, outputQuantity, unitCost: Math.round(totalCost / outputQuantity) };
 }
 
-export function buildProductionConsumption(config: ManufacturingConfig, productionQuantity: number): BomComponent[] {
+export function buildProductionConsumption(config: ManufacturingConfig, productionOutputQuantity: number): BomComponent[] {
   const normalized = validateManufacturingConfig(config);
-  const ratio = positiveQuantity(productionQuantity, "Production quantity") / normalized.batchQuantity;
+  const outputPerBatch = normalized.batchQuantity * (1 - Number(normalized.wastagePercent ?? 0) / 100);
+  const ratio = positiveQuantity(productionOutputQuantity, "Production quantity") / outputPerBatch;
   return normalized.bom.map((component) => ({ ...component, quantity: component.quantity * ratio }));
 }
