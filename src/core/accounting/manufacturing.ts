@@ -2,59 +2,13 @@ import { ValidationError } from "./errors";
 import type { Money } from "./types";
 
 export type ManufacturingCostType = "material" | "labour" | "electricity" | "machine" | "overhead" | "other";
+export interface BomComponent { itemId: string; quantity: number; scrapPercent?: number; unitCost?: Money; notes?: string; }
+export interface ManufacturingCostComponent { type: ManufacturingCostType; name: string; amount: Money; accountId?: string; allocationBasis?: "direct" | "per_unit" | "percentage" | "quantity"; notes?: string; }
+export interface ManufacturingConfig { enabled: boolean; bom: BomComponent[]; batchQuantity: number; wastagePercent?: number; costComponents?: ManufacturingCostComponent[]; costingMethod?: "standard" | "actual"; finishedGoodsAccountId?: string; wipAccountId?: string; manufacturingOverheadAccountId?: string; }
+export interface ManufacturingCostResult { materialCost: Money; labourCost: Money; electricityCost: Money; machineCost: Money; overheadCost: Money; otherCost: Money; totalCost: Money; outputQuantity: number; unitCost: Money; }
 
-export interface BomComponent {
-  itemId: string;
-  quantity: number;
-  scrapPercent?: number;
-  unitCost?: Money;
-  notes?: string;
-}
-
-export interface ManufacturingCostComponent {
-  type: ManufacturingCostType;
-  name: string;
-  amount: Money;
-  accountId?: string;
-  allocationBasis?: "direct" | "per_unit" | "percentage" | "quantity";
-  notes?: string;
-}
-
-export interface ManufacturingConfig {
-  enabled: boolean;
-  bom: BomComponent[];
-  batchQuantity: number;
-  wastagePercent?: number;
-  costComponents?: ManufacturingCostComponent[];
-  costingMethod?: "standard" | "actual";
-  finishedGoodsAccountId?: string;
-  wipAccountId?: string;
-  manufacturingOverheadAccountId?: string;
-}
-
-export interface ManufacturingCostResult {
-  materialCost: Money;
-  labourCost: Money;
-  electricityCost: Money;
-  machineCost: Money;
-  overheadCost: Money;
-  otherCost: Money;
-  totalCost: Money;
-  outputQuantity: number;
-  unitCost: Money;
-}
-
-function money(value: unknown, name: string): Money {
-  const n = Number(value ?? 0);
-  if (!Number.isSafeInteger(n) || n < 0) throw new ValidationError(`${name} must be a non-negative integer minor-unit amount.`);
-  return n;
-}
-
-function positiveQuantity(value: unknown, name: string): number {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) throw new ValidationError(`${name} must be greater than zero.`);
-  return n;
-}
+function money(value: unknown, name: string): Money { const n = Number(value ?? 0); if (!Number.isSafeInteger(n) || n < 0) throw new ValidationError(`${name} must be a non-negative integer minor-unit amount.`); return n; }
+function positiveQuantity(value: unknown, name: string): number { const n = Number(value); if (!Number.isFinite(n) || n <= 0) throw new ValidationError(`${name} must be greater than zero.`); return n; }
 
 export function validateManufacturingConfig(config: ManufacturingConfig): ManufacturingConfig {
   if (!config || config.enabled !== true) throw new ValidationError("Manufacturing configuration must be enabled for a manufactured item.");
@@ -93,13 +47,12 @@ export function calculateManufacturingCost(input: { config: ManufacturingConfig;
   }
   const costs = { labourCost: 0, electricityCost: 0, machineCost: 0, overheadCost: 0, otherCost: 0 };
   for (const component of config.costComponents ?? []) {
-    const amount = component.amount;
-    if (component.type === "labour") costs.labourCost += amount;
-    else if (component.type === "electricity") costs.electricityCost += amount;
-    else if (component.type === "machine") costs.machineCost += amount;
-    else if (component.type === "overhead") costs.overheadCost += amount;
-    else if (component.type === "other") costs.otherCost += amount;
-    else materialCost += amount;
+    if (component.type === "labour") costs.labourCost += component.amount;
+    else if (component.type === "electricity") costs.electricityCost += component.amount;
+    else if (component.type === "machine") costs.machineCost += component.amount;
+    else if (component.type === "overhead") costs.overheadCost += component.amount;
+    else if (component.type === "other") costs.otherCost += component.amount;
+    else materialCost += component.amount;
   }
   const totalCost = materialCost + costs.labourCost + costs.electricityCost + costs.machineCost + costs.overheadCost + costs.otherCost;
   if (!Number.isSafeInteger(totalCost)) throw new ValidationError("Total manufacturing cost exceeds safe integer range.");
@@ -112,5 +65,5 @@ export function buildProductionConsumption(config: ManufacturingConfig, producti
   const normalized = validateManufacturingConfig(config);
   const outputPerBatch = normalized.batchQuantity * (1 - Number(normalized.wastagePercent ?? 0) / 100);
   const ratio = positiveQuantity(productionOutputQuantity, "Production quantity") / outputPerBatch;
-  return normalized.bom.map((component) => ({ ...component, quantity: component.quantity * ratio }));
+  return normalized.bom.map((component) => ({ ...component, quantity: component.quantity * (1 + Number(component.scrapPercent ?? 0) / 100) * ratio }));
 }
