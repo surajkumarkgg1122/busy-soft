@@ -30,16 +30,16 @@ function key(body:Record<string,unknown>){const value=String(body.idempotencyKey
 const deps=()=>({ids:{next:(prefix:string)=>`${prefix}-${randomUUID()}`},clock:{now:()=>new Date().toISOString()}});
 async function currentFy(db:any,businessId:string){const snap=await businessRef(db,businessId).collection("financialYears").where("locked","==",false).orderBy("startDate","desc").limit(1).get();if(snap.empty)throw new Error("No open financial year is configured for this business.");return String(snap.docs[0].id);}
 function positiveRupees(value:unknown,name="Amount"){const n=Number(value);if(!Number.isFinite(n)||n<=0)throw new Error(`${name} must be greater than zero.`);const minor=Math.round(n*100);if(!Number.isSafeInteger(minor)||minor<=0)throw new Error(`${name} is too large or invalid.`);return{rupees:n,minor};}
+function nonNegativeRupees(value:unknown,name="Amount"){const n=Number(value);if(!Number.isFinite(n)||n<0)throw new Error(`${name} must be a non-negative amount.`);const minor=Math.round(n*100);if(!Number.isSafeInteger(minor)||minor<0)throw new Error(`${name} is too large or invalid.`);return{rupees:n,minor};}
 
 export async function GET(request:Request){
   try{
     const {db,token}=await auth(request);const url=new URL(request.url);const businessId=(url.searchParams.get("businessId")||"").trim();if(!businessId)return fail("Business ID is required.");
-    const member=await membership(db,businessId,token.uid);if(!allowed(member,"view")&&member.role!=="owner"&&member.role!=="admin")return fail("Cash & Bank view permission denied.",403);
+    const member=await membership(db,businessId,token.uid);if(!allowed(member,"view"))return fail("Cash & Bank view permission denied.",403);
     const ref=businessRef(db,businessId),fyId=await currentFy(db,businessId),includeInactive=url.searchParams.get("includeInactive")==="true";
     const accountQuery=includeInactive?ref.collection("bankAccounts"):ref.collection("bankAccounts").where("status","==","active");
     const [cashSnap,ledgerSnap,accountsSnap]=await Promise.all([accountQuery.get(),ref.collection("ledgerEntries").where("financialYearId","==",fyId).get(),ref.collection("accounts").where("active","==",true).get()]);
-    const cashAccounts=cashSnap.docs.map((d:any)=>({accountId:d.id,...d.data()}));
-    const balance=new Map<string,number>();
+    const cashAccounts=cashSnap.docs.map((d:any)=>({accountId:d.id,...d.data()}));const balance=new Map<string,number>();
     for(const d of ledgerSnap.docs){const x=d.data() as any;const accountId=String(x.accountId||"");if(accountId)balance.set(accountId,(balance.get(accountId)||0)+Number(x.debit||0)-Number(x.credit||0));}
     const accountMap=new Map<string,any>(accountsSnap.docs.map((d:any)=>[d.id,{accountId:d.id,...d.data()}]));
     const enriched=cashAccounts.map((a:any)=>{const gl=accountMap.get(String(a.ledgerAccountId||""));const ledgerBalance=Number(balance.get(String(a.ledgerAccountId||""))||0);const opening=Number(gl?.openingDebit||0)-Number(gl?.openingCredit||0);return{...a,currentBalance:opening+ledgerBalance,balanceSource:"accountingLedger",ledgerHealthy:Boolean(gl&&gl.type==="asset"&&gl.active!==false)};});
@@ -73,7 +73,7 @@ export async function POST(request:Request){
 
     if(action==="account"){
       const kind=body.kind==="cash"?"cash":"bank",name=String(body.displayName||"").trim();if(!name)return fail("Account name is required.");
-      const {minor}=body.openingBalance===undefined?{minor:0}:positiveRupees(Number(body.openingBalance)<0?"-1":body.openingBalance,"Opening balance");
+      const {minor}=nonNegativeRupees(body.openingBalance===undefined?0:body.openingBalance,"Opening balance");
       const accountId=`${kind}-${randomUUID()}`,ledgerAccountId=`cashbank-${randomUUID()}`,now=Timestamp.now();
       const parentId=kind==="cash"?"acct-cash":"acct-bank";const parentSnap=await ref.collection("accounts").doc(parentId).get();if(!parentSnap.exists||parentSnap.data()?.type!=="asset")return fail("Cash/Bank parent account is not configured.");
       const normalizedDate=String(body.openingBalanceDate||new Date().toISOString().slice(0,10));if(!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate))return fail("Opening balance date must be YYYY-MM-DD.");
