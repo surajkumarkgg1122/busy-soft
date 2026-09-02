@@ -31,14 +31,22 @@ export async function createCashBankAccount(repo:AccountingRepository,input:Cash
   });
 }
 
+// bankAccounts are already physically scoped to businesses/{businessId}. The repository
+// prevents reading another business's bankAccounts. Therefore ownership is established by
+// the repository scope; legacy bankAccount documents may contain a stale/missing businessId.
+// The linked GL account is still checked by postVoucher against the requested business.
+async function getScopedCashBankAccount(tx:any,accountId:string){
+  return await tx.getBusinessDocument("bankAccounts",accountId) as Record<string,unknown>|null;
+}
+
 export async function postCashBankEntry(repo:AccountingRepository,input:CashBankEntryInput,deps:CashBankDeps):Promise<PostingResult>{
   validateBase(input); amount(input.amount);
   const incoming=input.type==="deposit"||input.type==="cash_deposit";
   return repo.runInTransaction(async tx=>{
     const existing=await tx.getVoucherByIdempotencyKey(input.businessId,input.financialYearId,input.idempotencyKey);
     if(existing) return {voucher:existing};
-    const account=await tx.getBusinessDocument("bankAccounts",input.accountId);
-    if(!account||account.businessId!==input.businessId) throw new ValidationError("Cash/bank account was not found.");
+    const account=await getScopedCashBankAccount(tx,input.accountId);
+    if(!account) throw new ValidationError("Cash/bank account was not found in the active business.");
     if(account.status!=="active") throw new ValidationError("Cash/bank account is inactive.");
     if(String(account.ledgerAccountId)!==input.ledgerAccountId) throw new ValidationError("Cash/bank ledger account mismatch.");
     const contra=input.contraAccountId;
@@ -57,9 +65,9 @@ export async function postCashBankTransfer(repo:AccountingRepository,input:CashB
   return repo.runInTransaction(async tx=>{
     const existing=await tx.getVoucherByIdempotencyKey(input.businessId,input.financialYearId,input.idempotencyKey);
     if(existing) return {voucher:existing};
-    const from=await tx.getBusinessDocument("bankAccounts",input.fromAccountId); const to=await tx.getBusinessDocument("bankAccounts",input.toAccountId);
-    if(!from||!to) throw new ValidationError("Both cash/bank accounts are required.");
-    if(from.businessId!==input.businessId||to.businessId!==input.businessId) throw new ValidationError("Cash/bank account belongs to another business.");
+    const from=await getScopedCashBankAccount(tx,input.fromAccountId);
+    const to=await getScopedCashBankAccount(tx,input.toAccountId);
+    if(!from||!to) throw new ValidationError("Both cash/bank accounts must belong to the active business.");
     if(from.status!=="active"||to.status!=="active") throw new ValidationError("Both cash/bank accounts must be active.");
     if(String(from.ledgerAccountId)!==input.fromLedgerAccountId||String(to.ledgerAccountId)!==input.toLedgerAccountId) throw new ValidationError("Cash/bank ledger account mismatch.");
     const lines=[cr(input.fromLedgerAccountId,input.amount),dr(input.toLedgerAccountId,input.amount)];
