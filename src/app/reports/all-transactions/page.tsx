@@ -15,14 +15,17 @@ const COLLECTIONS = [
   ["quotations", "Estimate", "Estimate"], ["salesOrders", "Sale Order", "Sale Order"], ["purchaseOrders", "Purchase Order", "Purchase Order"],
   ["expenses", "Expense", "Expenses"], ["cashTransactions", "Cash Entry", "Cash & Bank"], ["bankTransactions", "Bank Entry", "Bank"],
 ] as const;
+const MINOR_UNIT_TYPES = new Set(["Sale", "Purchase", "Payment-In/Out", "Credit Note", "Debit Note", "Expense", "Cash Entry", "Bank Entry"]);
 const money = (n: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(n || 0);
 const dateKey = (value: unknown) => { if (!value) return ""; if (typeof value === "string") return value.slice(0, 10); const v = value as { toDate?: () => Date }; if (v?.toDate) return v.toDate().toISOString().slice(0, 10); const d = new Date(String(value)); return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10); };
 const dateLabel = (value: string) => value ? new Date(`${value}T00:00:00`).toLocaleDateString("en-IN") : "—";
 const num = (...values: unknown[]) => { for (const value of values) { const n = Number(value); if (Number.isFinite(n)) return n; } return 0; };
 function normalize(id: string, data: Record<string, any>, type: string, category: string): Tx {
-  const amount = num(data.total, data.amount, data.grandTotal, data.netTotal, data.value);
-  const received = num(data.paid, data.received, data.receivedAmount, data.paymentAmount, data.direction === "in" ? data.amount : 0);
-  const balance = num(data.balance, data.outstanding, type === "Sale" || type === "Purchase" ? amount - received : 0);
+  const scale = MINOR_UNIT_TYPES.has(type) ? 100 : 1;
+  const amount = num(data.total, data.amount, data.grandTotal, data.netTotal, data.value) / scale;
+  const received = num(data.paid, data.received, data.receivedAmount, data.paymentAmount, data.direction === "in" ? data.amount : 0) / scale;
+  const rawBalance = data.balance ?? data.outstanding;
+  const balance = rawBalance !== undefined ? Number(rawBalance) / scale : (type === "Sale" || type === "Purchase" ? amount - received : 0);
   return {
     id, date: dateKey(data.invoiceDate || data.date || data.orderDate || data.returnDate || data.createdAt || data.updatedAt),
     refNo: String(data.invoiceNumber ?? data.returnNumber ?? data.orderNumber ?? data.paymentNumber ?? data.referenceNumber ?? data.refNo ?? data.number ?? "—"),
