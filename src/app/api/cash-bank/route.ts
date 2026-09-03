@@ -4,6 +4,7 @@ import { getAdminServices } from "@/infrastructure/firebase/admin";
 import { createAdminAccountingRepository } from "@/infrastructure/firebase/adminAccountingRepository";
 import { createCashBankAccount, postCashBankEntry, postCashBankTransfer } from "@/core/accounting/cashBank";
 import { reversePostedVoucher } from "@/core/accounting/voucherReversal";
+import { buildCashBankLedgerHistory } from "@/core/accounting/cashBankHistory";
 
 export const runtime = "nodejs";
 type Member = { role?: string; status?: string; permissions?: Record<string, any> };
@@ -36,64 +37,6 @@ async function currentFinancialYear(db: any, businessId: string) {
   return years[0].id;
 }
 
-function normalizeLedgerRow(row: any, fallback: Record<string, unknown> = {}) {
-  return {
-    lineId: String(row.lineId ?? row.id ?? fallback.lineId ?? randomUUID()),
-    voucherId: String(row.voucherId ?? fallback.voucherId ?? ""),
-    date: String(row.date ?? fallback.date ?? ""),
-    voucherNumber: String(row.voucherNumber ?? fallback.voucherNumber ?? ""),
-    voucherType: String(row.voucherType ?? fallback.voucherType ?? ""),
-    accountId: String(row.accountId ?? fallback.accountId ?? ""),
-    partyId: row.partyId ?? fallback.partyId,
-    description: String(row.description ?? fallback.description ?? ""),
-    debit: Number(row.debit ?? 0),
-    credit: Number(row.credit ?? 0),
-  };
-}
-
-async function buildCashBankLedger(db: any, ref: any, financialYearId: string, ledgerAccountIds: string[]) {
-  const ledgerSnapshot = await ref.collection("ledgerEntries").where("financialYearId", "==", financialYearId).get();
-  const canonical = ledgerSnapshot.docs
-    .map((doc: any) => normalizeLedgerRow({ lineId: doc.id, ...doc.data() }))
-    .filter((row: any) => ledgerAccountIds.includes(row.accountId));
-
-  const covered = new Set(canonical.map((row: any) => row.accountId));
-  const missingAccountIds = ledgerAccountIds.filter((id) => !covered.has(id));
-  if (!missingAccountIds.length) return { rows: canonical, source: "ledgerEntries" };
-
-  const lineDocs: any[] = [];
-  for (let i = 0; i < missingAccountIds.length; i += 30) {
-    const chunk = missingAccountIds.slice(i, i + 30);
-    const snapshot = await ref.collection("voucherLines").where("accountId", "in", chunk).get();
-    lineDocs.push(...snapshot.docs);
-  }
-  if (!lineDocs.length) return { rows: canonical, source: "ledgerEntries" };
-
-  const vouchers = new Map<string, any>();
-  await Promise.all([...new Set(lineDocs.map((doc: any) => String(doc.data()?.voucherId ?? "")).filter(Boolean))].map(async (voucherId) => {
-    const snap = await ref.collection("vouchers").doc(voucherId).get();
-    if (snap.exists && String(snap.data()?.financialYearId ?? "") === financialYearId) vouchers.set(voucherId, { id: snap.id, ...snap.data() });
-  }));
-
-  const fallback = lineDocs.map((doc: any) => {
-    const line = doc.data() ?? {};
-    const voucher = vouchers.get(String(line.voucherId ?? ""));
-    return normalizeLedgerRow({ lineId: doc.id, ...line }, {
-      voucherId: line.voucherId,
-      accountId: line.accountId,
-      partyId: line.partyId,
-      date: voucher?.date,
-      voucherNumber: voucher?.voucherNumber,
-      voucherType: voucher?.voucherType,
-      description: line.description ?? voucher?.narration,
-    });
-  }).filter((row: any) => row.voucherId && row.voucherType.toUpperCase() !== "OPENING");
-
-  const merged = [...canonical, ...fallback];
-  merged.sort((a: any, b: any) => `${a.date}:${a.voucherNumber}:${a.lineId}`.localeCompare(`${b.date}:${b.voucherNumber}:${b.lineId}`));
-  return { rows: merged, source: fallback.length ? "ledgerEntries+voucherLines-fallback" : "ledgerEntries" };
-}
-
 export async function GET(request: Request) {
   try {
     const { db, token } = await authenticate(request);
@@ -114,7 +57,7 @@ export async function GET(request: Request) {
 
     const accountDocs = accountSnapshot.docs.map((doc: any) => ({ accountId: doc.id, ...doc.data() }));
     const ledgerAccountIds = accountDocs.map((account: any) => String(account.ledgerAccountId ?? "")).filter(Boolean);
-    const history = await buildCashBankLedger(db, ref, financialYearId, ledgerAccountIds);
+    const history = await buildCashBankLedgerHistory(db, ref, financialYearId, ledgerAccountIds);
     const ledger = history.rows;
     const glMap = new Map<string, any>(glSnapshot.docs.map((doc: any) => [doc.id, { accountId: doc.id, ...doc.data() }]));
     const activity = new Map<string, number>();
