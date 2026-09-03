@@ -30,7 +30,17 @@ export async function getSalesWorkspaceData(businessId:string): Promise<SalesWor
   const response = await fetch(`/api/accounting/sales/data?businessId=${encodeURIComponent(businessId)}`, { method:"GET", headers:{Authorization:`Bearer ${token}`}, cache:"no-store" });
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.success) throw new ValidationError(String(payload?.error ?? `Sales workspace failed (${response.status}).`));
-  return payload.data as SalesWorkspaceData;
+  const data = payload.data as SalesWorkspaceData;
+  return {
+    ...data,
+    items: data.items.map((item) => ({
+      ...item,
+      // Item master stores monetary prices in paise; Sales calculations use rupees.
+      purchasePrice: typeof item.purchasePrice === "number" ? item.purchasePrice / 100 : item.purchasePrice,
+      salePrice: typeof item.salePrice === "number" ? item.salePrice / 100 : item.salePrice,
+      mrp: typeof item.mrp === "number" ? item.mrp / 100 : item.mrp,
+    })),
+  };
 }
 
 async function createSaleFromBrowser(ctx:CreateSaleContext,input:CreateSaleInput):Promise<PostingResult>{
