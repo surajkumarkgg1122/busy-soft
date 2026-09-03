@@ -43,7 +43,7 @@ export default function QuotationsPage() {
   useEffect(() => { load(); }, [activeBusinessId, businessLoading]);
   const total = useMemo(() => lines.reduce((s, l) => s + l.quantity * l.price, 0), [lines]);
   const customer = customers.find(c => c.id === customerId);
-  const updateLine = (idx: number, value: string) => setLines(cur => cur.map((l, i) => i !== idx ? l : (() => { const item = items.find(x => x.id === value); return { ...l, itemId: value, name: item?.name || "", unit: item?.unit || "Piece", price: Number(item?.salePrice || 0) }; })()));
+  const updateLine = (idx: number, value: string) => setLines(cur => cur.map((l, i) => i !== idx ? l : (() => { const item = items.find(x => x.id === value); return { ...l, itemId: value, name: item?.name || "", unit: item?.unit || "Piece", price: Number(item?.salePrice || 0) / 100 }; })()));
   async function save() {
     if (!firestoreDb || !activeBusinessId || !number.trim() || !lines.some(l => l.itemId)) return setError("Enter a quotation number and add at least one item.");
     if (rows.some(r => String(r.quotationNumber) === number.trim())) return setError("Quotation number already exists in this business.");
