@@ -24,7 +24,10 @@ const credit=(accountId:string,amount:Money):VoucherLineInput=>({accountId,debit
 const required=(v:string|undefined,n:string)=>{if(!v)throw new ValidationError(`Missing ${n}.`);return v;};
 
 export async function postExpenseEntry(repo:AccountingRepository,input:ExpenseEntryInput,deps:TransactionDeps):Promise<PostingResult>{
-  if(!input.businessId||!input.financialYearId||!input.userId||!input.documentId)throw new ValidationError("Business, financial year, user and expense document are required.");
+  required(input.businessId,"business context");
+  required(input.financialYearId,"financial year");
+  required(input.userId,"authenticated user");
+  required(input.documentId,"expense document");
   if(!/^\d{4}-\d{2}-\d{2}$/.test(input.date))throw new ValidationError("Expense date must be YYYY-MM-DD.");
   if(!input.idempotencyKey)throw new ValidationError("Expense idempotency key is required.");
   assertMoney(input.amount,"Expense amount");
@@ -33,7 +36,7 @@ export async function postExpenseEntry(repo:AccountingRepository,input:ExpenseEn
 
   return repo.runInTransaction(async tx=>{
     const existing=await tx.getVoucherByIdempotencyKey(input.businessId,input.financialYearId,input.idempotencyKey);
-    if(existing) return postIdempotentVoucher(tx,{businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"EXPENSE",prefix:"EX",date:input.date,narration:input.narration,createdBy:input.userId,referenceType:"expense",referenceId:input.documentId,lines:[],idempotencyKey:input.idempotencyKey},deps);
+    if(existing)return postIdempotentVoucher(tx,{businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"EXPENSE",prefix:"EX",date:input.date,narration:input.narration,createdBy:input.userId,referenceType:"expense",referenceId:input.documentId,lines:[],idempotencyKey:input.idempotencyKey},deps);
     if(await tx.getBusinessDocument("expenses",input.documentId))throw new ValidationError(`Expense document ${input.documentId} already exists.`);
     const expenseAccount=await tx.getAccount(input.expenseAccountId);if(!expenseAccount||!expenseAccount.active||expenseAccount.type!=="expense")throw new ValidationError("Expense account does not exist or is inactive.");
     const settlementAccount=await tx.getAccount(settlement);if(!settlementAccount||!settlementAccount.active||settlementAccount.type!=="asset")throw new ValidationError("Cash/bank account does not exist or is inactive.");
