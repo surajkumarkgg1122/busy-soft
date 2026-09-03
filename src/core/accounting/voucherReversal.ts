@@ -7,9 +7,6 @@ export async function reversePostedVoucher(repo:AccountingRepository,input:{busi
  if(input.idempotencyKey.length<16||input.idempotencyKey.length>128)throw new ValidationError("A valid reversal idempotency key is required.");
  if(!/^\d{4}-\d{2}-\d{2}$/.test(input.date))throw new ValidationError("Reversal date must be YYYY-MM-DD.");
  return repo.runInTransaction(async tx=>{
-  // A retry of the same reversal command is idempotent. Check the key before
-  // checking the original voucher status because a successful reversal marks
-  // the original voucher cancelled.
   const existing=await tx.getVoucherByIdempotencyKey(input.businessId,input.financialYearId,input.idempotencyKey);
   if(existing){
    if(existing.referenceType!=="reversal"||existing.referenceId!==input.voucherId)throw new ValidationError("Reversal idempotency key is already used for another voucher.");
@@ -19,7 +16,7 @@ export async function reversePostedVoucher(repo:AccountingRepository,input:{busi
 
   const original=await tx.getVoucher(input.voucherId);if(!original)throw new ValidationError("Voucher not found.");
   if(original.businessId!==input.businessId||original.financialYearId!==input.financialYearId)throw new ValidationError("Voucher business or financial year mismatch.");
-  if(original.status!=="posted")throw new ValidationError("Only posted vouchers can be reversed.");
+  if(original.status!=="posted")throw new ValidationError("Only a posted voucher can be reversed.");
   if(original.createdBy===input.userId&&original.idempotencyKey===input.idempotencyKey)throw new ValidationError("Invalid reversal context.");
   const lines=await tx.getVoucherLines(original.id);if(!lines.length)throw new ValidationError("Cannot reverse a voucher without its lines.");
   const reversalLines:VoucherLineInput[]=lines.map(l=>({accountId:l.accountId,partyId:l.partyId,itemId:l.itemId,warehouseId:l.warehouseId,description:`Reversal of ${original.voucherNumber}`,debit:l.credit,credit:l.debit,taxCode:l.taxCode}));
@@ -27,23 +24,22 @@ export async function reversePostedVoucher(repo:AccountingRepository,input:{busi
   const now=deps.clock.now();
   await tx.saveVoucher({...original,status:"cancelled",cancelledAt:now,cancelledBy:input.userId,reversalOfVoucherId:result.voucher.id,updatedAt:now});
 
-  // Keep the Cash/Bank master balances synchronized with the canonical ledger.
-  // Reports still derive balances from ledger entries, but operational screens
-  // and other modules may read bankAccounts.currentBalance directly.
   if(original.referenceType==="cash_bank"&&original.referenceId){
    const account=await tx.getBusinessDocument("bankAccounts",original.referenceId);
-   if(account) {
-    const delta=lines.reduce((sum,l)=>sum+l.debit-l.credit,0);
-    await tx.saveBusinessDocument("bankAccounts",original.referenceId,{currentBalance:Number(account.currentBalance??0)-delta,lastVoucherId:result.voucher.id,lastTransactionAt:input.date,updatedAt:now});
+   if(account){
+    const accountLine=lines.find(l=>l.accountId===String(account.ledgerAccountId));
+    const originalDelta=Number(accountLine?.debit??0)-Number(accountLine?.credit??0);
+    await tx.saveBusinessDocument("bankAccounts",original.referenceId,{currentBalance:Number(account.currentBalance??0)-originalDelta,lastVoucherId:result.voucher.id,lastTransactionAt:input.date,updatedAt:now});
    }
   } else if(original.referenceType==="cash_bank_transfer"&&original.referenceId){
    const [fromAccountId,toAccountId]=String(original.referenceId).split(":");
    if(fromAccountId&&toAccountId){
     const [from,to]=await Promise.all([tx.getBusinessDocument("bankAccounts",fromAccountId),tx.getBusinessDocument("bankAccounts",toAccountId)]);
     if(from&&to){
-     const amount=lines.reduce((sum,l)=>sum+l.debit-l.credit,0);
-     await tx.saveBusinessDocument("bankAccounts",fromAccountId,{currentBalance:Number(from.currentBalance??0)-amount,lastVoucherId:result.voucher.id,lastTransactionAt:input.date,updatedAt:now});
-     await tx.saveBusinessDocument("bankAccounts",toAccountId,{currentBalance:Number(to.currentBalance??0)+amount,lastVoucherId:result.voucher.id,lastTransactionAt:input.date,updatedAt:now});
+     const fromLine=lines.find(l=>l.accountId===String(from.ledgerAccountId));
+     const amount=Math.abs(Number(fromLine?.debit??0)-Number(fromLine?.credit??0));
+     await tx.saveBusinessDocument("bankAccounts",fromAccountId,{currentBalance:Number(from.currentBalance??0)+amount,lastVoucherId:result.voucher.id,lastTransactionAt:input.date,updatedAt:now});
+     await tx.saveBusinessDocument("bankAccounts",toAccountId,{currentBalance:Number(to.currentBalance??0)-amount,lastVoucherId:result.voucher.id,lastTransactionAt:input.date,updatedAt:now});
     }
    }
   }
