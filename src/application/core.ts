@@ -37,31 +37,13 @@ export function executeSale(deps:ApplicationDeps,ctx:CommandContext,input:unknow
   const accountMap=(source.accountMap??{}) as Record<string,string|undefined>;
   const paymentMode=source.mode as "cash"|"bank"|"credit";
   const canonical:SaleEntryInput={
-    businessId:ctx.businessId,
-    financialYearId:ctx.financialYearId,
-    date:String(source.date??""),
-    userId:ctx.userId,
-    customerId:typeof source.customerId==="string"?source.customerId:undefined,
-    grossValue:Number(source.taxableValue),
-    taxRate:Number(source.taxRate),
-    intraState:Boolean(source.intraState),
-    cessRate:source.cessRate===undefined?undefined:Number(source.cessRate),
-    paymentMode,
-    paidAmount:paymentMode==="credit"?0:undefined,
-    bankAccountId:paymentMode==="bank"?accountMap.bank:undefined,
-    accountMap:{
-      party:accountMap.party!,sales:accountMap.sales!,cash:accountMap.cash,bank:accountMap.bank,
-      outputCgst:accountMap.outputCgst,outputSgst:accountMap.outputSgst,outputIgst:accountMap.outputIgst,
-      outputCess:accountMap.outputCess,inventory:accountMap.inventory!,cogs:accountMap.cogs!,
-    },
-    itemMovements:Array.isArray(source.itemMovements)?(source.itemMovements as Array<{itemId:string;quantity:number;warehouseId?:string}>):[],
-    valuationMethod:source.valuationMethod as SaleEntryInput["valuationMethod"],
-    narration:typeof source.narration==="string"?source.narration:undefined,
-    idempotencyKey:ctx.idempotencyKey,
-    documentId:typeof source.documentId==="string"?source.documentId:undefined,
-    documentPayload:source.documentPayload as Record<string,unknown>|undefined,
-  };
-  return execute(ctx,"SALE_CREATE",()=>postSaleEntry(deps.repo,canonical,deps));
+    businessId:ctx.businessId,financialYearId:ctx.financialYearId,date:String(source.date??""),userId:ctx.userId,
+    customerId:typeof source.customerId==="string"?source.customerId:undefined,grossValue:Number(source.taxableValue),taxRate:Number(source.taxRate),intraState:Boolean(source.intraState),
+    cessRate:source.cessRate===undefined?undefined:Number(source.cessRate),paymentMode,paidAmount:paymentMode==="credit"?0:undefined,bankAccountId:paymentMode==="bank"?accountMap.bank:undefined,
+    accountMap:{party:accountMap.party!,sales:accountMap.sales!,cash:accountMap.cash,bank:accountMap.bank,outputCgst:accountMap.outputCgst,outputSgst:accountMap.outputSgst,outputIgst:accountMap.outputIgst,outputCess:accountMap.outputCess,inventory:accountMap.inventory!,cogs:accountMap.cogs!},
+    itemMovements:Array.isArray(source.itemMovements)?(source.itemMovements as Array<{itemId:string;quantity:number;warehouseId?:string}>):[],valuationMethod:source.valuationMethod as SaleEntryInput["valuationMethod"],narration:typeof source.narration==="string"?source.narration:undefined,idempotencyKey:ctx.idempotencyKey,
+    documentId:typeof source.documentId==="string"&&source.documentId.trim()?source.documentId.trim():deps.ids.next("sale"),documentPayload:source.documentPayload as Record<string,unknown>|undefined,
+  };return execute(ctx,"SALE_CREATE",()=>postSaleEntry(deps.repo,canonical,deps));
 }
 
 export function executePurchase(deps:ApplicationDeps,ctx:CommandContext,input:unknown){return execute(ctx,"PURCHASE_CREATE",()=>postPurchase(deps.repo,{...(input as object),businessId:ctx.businessId,userId:ctx.userId,idempotencyKey:ctx.idempotencyKey,financialYearId:ctx.financialYearId} as never,deps));}
@@ -69,7 +51,11 @@ export function executeSaleReturn(deps:ApplicationDeps,ctx:CommandContext,input:
 export function executePurchaseReturn(deps:ApplicationDeps,ctx:CommandContext,input:unknown){return execute(ctx,"RETURN_CREATE",()=>postPurchaseReturn(deps.repo,{...(input as object),businessId:ctx.businessId,userId:ctx.userId,idempotencyKey:ctx.idempotencyKey,financialYearId:ctx.financialYearId} as never,deps));}
 export function executeReceipt(deps:ApplicationDeps,ctx:CommandContext,input:unknown){return execute(ctx,"RECEIPT_CREATE",()=>postReceiptIdempotent(deps.repo,{...(input as object),businessId:ctx.businessId,userId:ctx.userId,idempotencyKey:ctx.idempotencyKey} as never,deps));}
 export function executePayment(deps:ApplicationDeps,ctx:CommandContext,input:unknown){return execute(ctx,"PAYMENT_CREATE",()=>postPaymentIdempotent(deps.repo,{...(input as object),businessId:ctx.businessId,userId:ctx.userId,idempotencyKey:ctx.idempotencyKey} as never,deps));}
-export function executeExpense(deps:ApplicationDeps,ctx:CommandContext,input:unknown){return execute(ctx,"EXPENSE_CREATE",()=>postExpenseEntry(deps.repo,{...(input as object),businessId:ctx.businessId,userId:ctx.userId,idempotencyKey:ctx.idempotencyKey} as never,deps));}
+export function executeExpense(deps:ApplicationDeps,ctx:CommandContext,input:unknown){
+  const source=input as Record<string,unknown>;
+  const canonical={...source,businessId:ctx.businessId,userId:ctx.userId,financialYearId:ctx.financialYearId,idempotencyKey:ctx.idempotencyKey,documentId:typeof source.documentId==="string"&&source.documentId.trim()?source.documentId.trim():deps.ids.next("expense")};
+  return execute(ctx,"EXPENSE_CREATE",()=>postExpenseEntry(deps.repo,canonical as never,deps));
+}
 
 /** @deprecated Use executeExpense. Retained only as a compatibility shim for existing integrations. */
 export function executeLegacyExpense(deps:ApplicationDeps,ctx:CommandContext,input:unknown){return execute(ctx,"EXPENSE_CREATE",()=>postExpense(deps.repo,{...(input as object),businessId:ctx.businessId,userId:ctx.userId} as never,deps));}
