@@ -34,31 +34,9 @@ export function createStockMovement(input:StockMovementRequest,ids:IdGenerator,c
   validateTracking(input);
   const value=Math.round(input.quantity*input.unitCost);
   if(!Number.isSafeInteger(value)||value<0)throw new ValidationError("Stock movement value exceeds safe integer range.");
-  return{
-    id:ids.next("stk"),businessId:input.businessId,financialYearId:input.financialYearId,date:input.date,itemId:input.itemId,
-    warehouseId:normalizeWarehouseId(input.warehouseId),direction:input.direction,quantity:input.quantity,unitCost:input.unitCost,value,
-    sourceType:input.sourceType,sourceId:input.sourceId,createdBy:input.createdBy,createdAt,
-    ...(input.batchId?{batchId:input.batchId}:{}),...(input.batchNumber?{batchNumber:input.batchNumber}:{}),
-    ...(input.manufactureDate?{manufactureDate:input.manufactureDate}:{}),...(input.expiryDate?{expiryDate:input.expiryDate}:{}),
-    ...(input.serialNumbers?{serialNumbers:[...input.serialNumbers]}:{}),...(input.unitId?{unitId:input.unitId}:{}),
-    ...(input.quantityInBaseUnit!==undefined?{quantityInBaseUnit:input.quantityInBaseUnit}:{}),
-  };
+  return{id:ids.next("stk"),businessId:input.businessId,financialYearId:input.financialYearId,date:input.date,itemId:input.itemId,warehouseId:normalizeWarehouseId(input.warehouseId),direction:input.direction,quantity:input.quantity,unitCost:input.unitCost,value,sourceType:input.sourceType,sourceId:input.sourceId,createdBy:input.createdBy,createdAt,...(input.batchId?{batchId:input.batchId}:{}),...(input.batchNumber?{batchNumber:input.batchNumber}:{}),...(input.manufactureDate?{manufactureDate:input.manufactureDate}:{}),...(input.expiryDate?{expiryDate:input.expiryDate}:{}),...(input.serialNumbers?{serialNumbers:[...input.serialNumbers]}:{}),...(input.unitId?{unitId:input.unitId}:{}),...(input.quantityInBaseUnit!==undefined?{quantityInBaseUnit:input.quantityInBaseUnit}:{}),};
 }
 
 export function signedQuantity(movement:Pick<StockMovement,"direction"|"quantity">):number{return movement.direction==="in"?movement.quantity:-movement.quantity;}
 export function calculateStockBalance(movements:readonly Pick<StockMovement,"direction"|"quantity">[]):number{const value=movements.reduce((sum,m)=>sum+signedQuantity(m),0);if(!Number.isFinite(value)||Math.abs(value)>Number.MAX_SAFE_INTEGER)throw new ValidationError("Stock quantity exceeds safe numeric range.");return value;}
 export function calculateStockValue(movements:readonly Pick<StockMovement,"direction"|"quantity"|"unitCost">[]):Money{const value=movements.reduce((sum,m)=>sum+signedQuantity(m)*m.unitCost,0);if(!Number.isSafeInteger(value))throw new ValidationError("Stock value exceeds safe integer range.");return value;}
-
-export function assertStockMovementIntegrity(movements:readonly StockMovement[]):void{
-  const ids=new Set<string>();
-  const sources=new Set<string>();
-  for(const m of movements){
-    if(ids.has(m.id)) throw new ValidationError(`Duplicate stock movement ID: ${m.id}.`);
-    ids.add(m.id);
-    if(!m.businessId||!m.financialYearId||!m.itemId||!m.sourceId) throw new ValidationError("Stock movement is missing its business, financial year, item or source.");
-    if(m.quantity<=0||!Number.isFinite(m.quantity)||!Number.isSafeInteger(m.value)||m.value<0) throw new ValidationError(`Invalid stock movement ${m.id}.`);
-    const sourceKey=`${m.businessId}:${m.financialYearId}:${m.sourceId}:${m.itemId}:${normalizeWarehouseId(m.warehouseId)}:${m.direction}`;
-    if(sources.has(sourceKey)) throw new ValidationError(`Duplicate stock movement for source ${m.sourceId}, item ${m.itemId}, warehouse ${normalizeWarehouseId(m.warehouseId)}.`);
-    sources.add(sourceKey);
-  }
-}
