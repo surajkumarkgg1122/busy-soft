@@ -52,8 +52,9 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
   const key = (input.idempotencyKey ?? `${input.commandType.toLowerCase()}-${input.businessId}-${crypto.randomUUID()}`).trim();
   if (key.length < 16 || key.length > 128) throw new Error("Offline idempotency key must be 16–128 characters.");
   const operationId = crypto.randomUUID();
+  const documentId = input.entityId ?? `${input.commandType.toLowerCase()}-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
-  const payload = { ...input.payload, businessId: input.businessId, financialYearId: input.financialYearId, idempotencyKey: key };
+  const payload = { ...input.payload, businessId: input.businessId, financialYearId: input.financialYearId, idempotencyKey: key, documentId };
   const ctx: CommandContext = {
     businessId: input.businessId,
     financialYearId: input.financialYearId,
@@ -70,7 +71,7 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
     financialYearId: input.financialYearId,
     deviceId: deviceId(),
     entityType: input.entityType ?? input.commandType,
-    entityId: input.entityId,
+    entityId: documentId,
     commandType: input.commandType,
     payload,
     status: "PENDING",
@@ -80,8 +81,6 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
     dependencies: input.dependencies ?? [],
   };
 
-  // The outbox row is inserted BEFORE invoking the domain command, inside the
-  // same Dexie transaction. If the command fails, the entire transaction rolls back.
   return db.transaction("rw", [
     db.businesses, db.financialYears, db.accounts, db.parties, db.items, db.units, db.warehouses,
     db.taxConfigurations, db.vouchers, db.voucherLines, db.ledgerEntries, db.stockMovements,
@@ -94,20 +93,18 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
     const result = await dispatch(input.commandType, repo, ctx, payload);
     const value = result.value as Record<string, unknown>;
     const voucher = value && typeof value === "object" && value.voucher && typeof value.voucher === "object" ? value.voucher as Record<string, unknown> : undefined;
-    const entityId = input.entityId ?? (voucher?.id as string | undefined);
+    const entityId = input.entityId ?? (voucher?.id as string | undefined) ?? documentId;
     await db.syncOperations.update(operationId, { entityId, updatedAt: new Date().toISOString() });
-    if (entityId) {
-      await db.localTransactions.put({
-        id: `${input.commandType}:${entityId}`,
-        businessId: input.businessId,
-        financialYearId: input.financialYearId,
-        entityType: input.entityType ?? input.commandType,
-        entityId,
-        lifecycle: "POSTED",
-        syncStatus: "PENDING",
-        localUpdatedAt: new Date().toISOString(),
-      });
-    }
+    await db.localTransactions.put({
+      id: `${input.commandType}:${entityId}`,
+      businessId: input.businessId,
+      financialYearId: input.financialYearId,
+      entityType: input.entityType ?? input.commandType,
+      entityId,
+      lifecycle: "POSTED",
+      syncStatus: "PENDING",
+      localUpdatedAt: new Date().toISOString(),
+    });
     return result;
   });
 }
