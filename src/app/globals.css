@@ -1,105 +1,20 @@
 @import "tailwindcss";
 
-/* =========================================================
-   BUSINESS SOFT ERP — CENTRAL THEME
-   Change these tokens to re-theme the application later.
-   ========================================================= */
 :root {
-  --erp-primary: #4f46e5;
-  --erp-primary-hover: #4338ca;
-  --erp-primary-soft: #eeedff;
-  --erp-primary-ring: rgba(79, 70, 229, 0.12);
-  --erp-accent: #f5a229;
-  --erp-accent-hover: #df8e18;
-  --erp-background: #f8f7f4;
-  --erp-surface: #ffffff;
-  --erp-surface-muted: #fbfaf9;
-  --erp-surface-subtle: #f4f3f1;
-  --erp-text: #182230;
-  --erp-text-secondary: #344054;
-  --erp-text-muted: #667085;
-  --erp-text-faint: #98a2b3;
-  --erp-border: #e7e5e4;
-  --erp-border-light: #eaecf0;
-  --erp-border-input: #d0d5dd;
-  --erp-success: #168361;
-  --erp-success-soft: #e8f8f1;
-  --erp-warning: #b7791f;
-  --erp-warning-soft: #fff7e8;
-  --erp-danger: #c13c25;
-  --erp-danger-soft: #fff1ed;
-  --erp-error: #b42318;
-  --erp-error-soft: #fef3f2;
-  --erp-sidebar: #182230;
-  --erp-sidebar-hover: #222e3f;
-  --erp-sidebar-active: var(--erp-primary);
-  --erp-font-sans: var(--font-geist-sans);
-  --erp-font-mono: var(--font-geist-mono);
-  --erp-radius-sm: 0.625rem;
-  --erp-radius-md: 0.75rem;
-  --erp-radius-lg: 1rem;
-  --erp-radius-xl: 1.25rem;
-  --erp-shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
-  --erp-shadow-panel: 0 3px 10px rgba(16, 24, 40, 0.04);
+  --erp-primary: #4f46e5; --erp-primary-hover: #4338ca; --erp-primary-soft: #eeedff; --erp-primary-ring: rgba(79,70,229,.12); --erp-accent: #f5a229; --erp-accent-hover: #df8e18; --erp-background: #f8f7f4; --erp-surface: #fff; --erp-surface-muted: #fbfaf9; --erp-surface-subtle: #f4f3f1; --erp-text: #182230; --erp-text-secondary: #344054; --erp-text-muted: #667085; --erp-text-faint: #98a2b3; --erp-border: #e7e5e4; --erp-border-light: #eaecf0; --erp-border-input: #d0d5dd; --erp-success: #168361; --erp-success-soft: #e8f8f1; --erp-warning: #b7791f; --erp-warning-soft: #fff7e8; --erp-danger: #c13c25; --erp-danger-soft: #fff1ed; --erp-error: #b42318; --erp-error-soft: #fef3f2; --erp-sidebar: #182230; --erp-sidebar-hover: #222e3f; --erp-sidebar-active: var(--erp-primary); --erp-font-sans: var(--font-geist-sans); --erp-font-mono: var(--font-geist-mono); --erp-radius-sm: .625rem; --erp-radius-md: .75rem; --erp-radius-lg: 1rem;
 }
 
-.light { --background: var(--erp-surface); --foreground: var(--erp-text); }
-.dark { --background: #0a0a0a; --foreground: #ededed; }
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-erp-primary: var(--erp-primary);
-  --color-erp-primary-hover: var(--erp-primary-hover);
-  --color-erp-primary-soft: var(--erp-primary-soft);
-  --color-erp-accent: var(--erp-accent);
-  --color-erp-accent-hover: var(--erp-accent-hover);
-  --color-erp-surface: var(--erp-surface);
-  --color-erp-surface-muted: var(--erp-surface-muted);
-  --color-erp-text: var(--erp-text);
-  --color-erp-text-secondary: var(--erp-text-secondary);
-  --color-erp-text-muted: var(--erp-text-muted);
-  --color-erp-text-faint: var(--erp-text-faint);
-  --color-erp-border: var(--erp-border);
-  --color-erp-border-light: var(--erp-border-light);
-  --color-erp-success: var(--erp-success);
-  --color-erp-success-soft: var(--erp-success-soft);
-  --color-erp-warning: var(--erp-warning);
-  --color-erp-warning-soft: var(--erp-warning-soft);
-  --color-erp-danger: var(--erp-danger);
-  --color-erp-danger-soft: var(--erp-danger-soft);
-  --color-erp-sidebar: var(--erp-sidebar);
-  --font-sans: var(--erp-font-sans);
-  --font-mono: var(--erp-font-mono);
-}
-
-html, body { min-height: 100%; }
-body { background: var(--background); color: var(--foreground); font-family: var(--erp-font-sans), sans-serif; }
-
-.erp-page { background: var(--erp-background); color: var(--erp-text); }
-.erp-card { border: 1px solid var(--erp-border); background: var(--erp-surface); border-radius: var(--erp-radius-lg); box-shadow: var(--erp-shadow-card); }
-.erp-panel { border: 1px solid var(--erp-border); background: var(--erp-surface); border-radius: var(--erp-radius-lg); box-shadow: var(--erp-shadow-panel); }
-.erp-input, .input { border: 1px solid var(--erp-border-input); background: var(--erp-surface); color: var(--erp-text-secondary); border-radius: var(--erp-radius-md); outline: none; }
-.erp-input:focus, .input:focus { border-color: var(--erp-primary); box-shadow: 0 0 0 4px var(--erp-primary-ring); }
-.erp-btn-primary { background: var(--erp-primary); color: #fff; border-radius: var(--erp-radius-md); }
-.erp-btn-primary:hover { background: var(--erp-primary-hover); }
-.erp-btn-accent { background: var(--erp-accent); color: #fff; border-radius: var(--erp-radius-md); }
-.erp-btn-accent:hover { background: var(--erp-accent-hover); }
-.erp-status-success { background: var(--erp-success-soft); color: var(--erp-success); }
-.erp-status-warning { background: var(--erp-warning-soft); color: var(--erp-warning); }
-.erp-status-danger { background: var(--erp-danger-soft); color: var(--erp-danger); }
-.erp-status-error { background: var(--erp-error-soft); color: var(--erp-error); }
-.erp-text-primary { color: var(--erp-primary); }
-.erp-text-main { color: var(--erp-text); }
-.erp-text-secondary { color: var(--erp-text-secondary); }
-.erp-text-muted { color: var(--erp-text-muted); }
-.erp-text-faint { color: var(--erp-text-faint); }
-.erp-bg { background: var(--erp-background); }
-.erp-surface { background: var(--erp-surface); }
-.erp-border { border-color: var(--erp-border); }
-.erp-sidebar { background: var(--erp-sidebar); }
-
-table { width: 100%; min-width: 0 !important; table-layout: fixed; }
-table th:first-child, table td:first-child { width: 18%; }
-table td:first-child > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-table th:last-child, table td:last-child { width: 7%; white-space: nowrap; }
+.busy-invoice { box-sizing:border-box; width:100%; max-width:210mm; margin:0 auto; padding:12mm; background:#fff; color:#111827; font:12px/1.45 Arial,sans-serif; }
+.busy-invoice-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; border-bottom:1px solid #d1d5db; padding-bottom:10px; margin-bottom:16px; }
+.busy-invoice-header h1 { margin:0 0 4px; font-size:22px; }
+.busy-invoice-logo,.busy-invoice-signature { max-width:160px; max-height:70px; object-fit:contain; }
+.busy-invoice-lines { width:100%; border-collapse:collapse; margin-bottom:16px; }
+.busy-invoice-lines th,.busy-invoice-lines td { border:1px solid #d1d5db; padding:6px; text-align:left; }
+.busy-invoice-lines th:nth-child(n+2),.busy-invoice-lines td:nth-child(n+2) { text-align:right; }
+.busy-invoice-summary { margin-left:auto; width:min(320px,100%); }
+.busy-invoice-summary div { display:flex; justify-content:space-between; gap:16px; padding:4px 0; }
+.busy-invoice-grand-total { border-top:2px solid #111827; margin-top:4px; padding-top:7px !important; font-size:14px; }
+.busy-invoice-payment { margin:16px 0; padding:10px; border:1px solid #d1d5db; }
+.busy-invoice-thermal { width:80mm; max-width:80mm; padding:4mm; font-size:10px; }
+.busy-invoice-thermal .busy-invoice-header h1 { font-size:16px; }
+@media print { @page { size:A4; margin:0; } body { margin:0; background:#fff !important; } .busy-invoice { max-width:none; margin:0; box-shadow:none; } .busy-invoice-a5 { width:148mm; max-width:148mm; } .busy-invoice-thermal { width:80mm; max-width:80mm; } .no-print { display:none !important; } }
