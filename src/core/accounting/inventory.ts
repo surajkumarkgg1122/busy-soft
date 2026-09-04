@@ -11,6 +11,7 @@ export interface StockMovementRequest {
 function validateTracking(input:StockMovementRequest){
   if(input.expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.expiryDate)) throw new ValidationError("Expiry date must use YYYY-MM-DD format.");
   if(input.manufactureDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.manufactureDate)) throw new ValidationError("Manufacture date must use YYYY-MM-DD format.");
+  if(input.date && !/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new ValidationError("Stock movement date must use YYYY-MM-DD format.");
   if(input.manufactureDate && input.expiryDate && input.expiryDate < input.manufactureDate) throw new ValidationError("Expiry date cannot be before manufacture date.");
   if(input.batchNumber && !input.batchId) throw new ValidationError("Batch number requires a batch ID.");
   if(input.serialNumbers){
@@ -18,7 +19,7 @@ function validateTracking(input:StockMovementRequest){
     const normalized=input.serialNumbers.map(x=>x.trim()).filter(Boolean);
     if(normalized.length!==input.serialNumbers.length) throw new ValidationError("Serial numbers cannot be blank.");
     if(new Set(normalized).size!==normalized.length) throw new ValidationError("Serial numbers must be unique within a stock movement.");
-    if(normalized.length!==input.quantity) throw new ValidationError("Serial-tracked stock quantity must equal the number of serial numbers.");
+    if(!Number.isSafeInteger(input.quantity) || normalized.length!==input.quantity) throw new ValidationError("Serial-tracked stock quantity must be a whole number equal to the number of serial numbers.");
   }
   if(input.quantityInBaseUnit!==undefined && (!Number.isFinite(input.quantityInBaseUnit)||input.quantityInBaseUnit<=0)) throw new ValidationError("Base-unit quantity must be greater than zero.");
 }
@@ -26,6 +27,7 @@ function validateTracking(input:StockMovementRequest){
 export function createStockMovement(input:StockMovementRequest,ids:IdGenerator,createdAt:string):StockMovement{
   if(!input.businessId||!input.financialYearId)throw new ValidationError("Stock movement requires business and financial year.");
   if(!input.itemId)throw new ValidationError("Stock movement requires an item.");
+  if(input.direction!=="in"&&input.direction!=="out")throw new ValidationError("Invalid stock movement direction.");
   if(!Number.isFinite(input.quantity)||input.quantity<=0)throw new ValidationError("Stock quantity must be greater than zero.");
   if(!Number.isSafeInteger(input.unitCost)||input.unitCost<0)throw new ValidationError("Unit cost must be a non-negative integer minor-unit amount.");
   if(!input.sourceId)throw new ValidationError("Stock movement requires a source voucher.");
@@ -46,3 +48,17 @@ export function createStockMovement(input:StockMovementRequest,ids:IdGenerator,c
 export function signedQuantity(movement:Pick<StockMovement,"direction"|"quantity">):number{return movement.direction==="in"?movement.quantity:-movement.quantity;}
 export function calculateStockBalance(movements:readonly Pick<StockMovement,"direction"|"quantity">[]):number{const value=movements.reduce((sum,m)=>sum+signedQuantity(m),0);if(!Number.isFinite(value)||Math.abs(value)>Number.MAX_SAFE_INTEGER)throw new ValidationError("Stock quantity exceeds safe numeric range.");return value;}
 export function calculateStockValue(movements:readonly Pick<StockMovement,"direction"|"quantity"|"unitCost">[]):Money{const value=movements.reduce((sum,m)=>sum+signedQuantity(m)*m.unitCost,0);if(!Number.isSafeInteger(value))throw new ValidationError("Stock value exceeds safe integer range.");return value;}
+
+export function assertStockMovementIntegrity(movements:readonly StockMovement[]):void{
+  const ids=new Set<string>();
+  const sources=new Set<string>();
+  for(const m of movements){
+    if(ids.has(m.id)) throw new ValidationError(`Duplicate stock movement ID: ${m.id}.`);
+    ids.add(m.id);
+    if(!m.businessId||!m.financialYearId||!m.itemId||!m.sourceId) throw new ValidationError("Stock movement is missing its business, financial year, item or source.");
+    if(m.quantity<=0||!Number.isFinite(m.quantity)||!Number.isSafeInteger(m.value)||m.value<0) throw new ValidationError(`Invalid stock movement ${m.id}.`);
+    const sourceKey=`${m.businessId}:${m.financialYearId}:${m.sourceId}:${m.itemId}:${normalizeWarehouseId(m.warehouseId)}:${m.direction}`;
+    if(sources.has(sourceKey)) throw new ValidationError(`Duplicate stock movement for source ${m.sourceId}, item ${m.itemId}, warehouse ${normalizeWarehouseId(m.warehouseId)}.`);
+    sources.add(sourceKey);
+  }
+}
