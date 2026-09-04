@@ -22,9 +22,8 @@ describe("security and RBAC hardening", () => {
     expect(() => assertAuthorized(ctx({ permissions: ["PURCHASE_CREATE"] }), "PURCHASE_CREATE")).not.toThrow();
   });
 
-  it("does not treat a business id alone as authorization", () => {
-    expect(() => assertAuthorized(ctx({ businessId: "business-other" }), "SALE_CREATE")).not.toThrow();
-    expect(() => assertTrustedPostingBoundary(ctx({ businessId: "business-other" }))).not.toThrow();
+  it("rejects missing user context even when a business id is supplied", () => {
+    expect(() => assertTrustedPostingBoundary(ctx({ userId: "" }))).toThrow(AuthorizationError);
   });
 
   it("rejects mutation of posted accounting vouchers", () => {
