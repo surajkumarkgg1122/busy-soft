@@ -3,32 +3,13 @@ import { calculateTax, reverseTax } from "../gst";
 import { ValidationError } from "../errors";
 
 describe("GST engine hardening",()=>{
-  it("splits intra-state GST into CGST and SGST",()=>{
-    const tax=calculateTax({taxableValue:10000,rate:18,intraState:true});
-    expect(tax.cgst).toBe(900); expect(tax.sgst).toBe(900); expect(tax.igst).toBe(0); expect(tax.totalTax).toBe(1800); expect(tax.total).toBe(11800);
-  });
-  it("uses IGST for inter-state transactions",()=>{
-    const tax=calculateTax({taxableValue:10000,rate:18,intraState:false});
-    expect(tax.cgst).toBe(0); expect(tax.sgst).toBe(0); expect(tax.igst).toBe(1800); expect(tax.totalTax).toBe(1800);
-  });
-  it("handles cess and zero-rated tax",()=>{
-    const cess=calculateTax({taxableValue:10000,rate:18,intraState:true,cessRate:2});
-    expect(cess.cess).toBe(200); expect(cess.total).toBe(12000);
-    const zero=calculateTax({taxableValue:10000,rate:0,intraState:true});
-    expect(zero.totalTax).toBe(0); expect(zero.total).toBe(10000);
-  });
-  it("reverses every tax component exactly",()=>{
-    const tax=calculateTax({taxableValue:12345,rate:18,intraState:true,cessRate:1});
-    const reversed=reverseTax(tax);
-    expect(reversed.taxableValue).toBe(-tax.taxableValue); expect(reversed.cgst).toBe(-tax.cgst); expect(reversed.sgst).toBe(-tax.sgst); expect(reversed.igst).toBe(-tax.igst); expect(reversed.cess).toBe(-tax.cess); expect(reversed.totalTax).toBe(-tax.totalTax); expect(reversed.total).toBe(-tax.total);
-  });
-  it("rejects invalid tax configuration",()=>{
-    expect(()=>calculateTax({taxableValue:10000,rate:-1,intraState:true})).toThrow(ValidationError);
-    expect(()=>calculateTax({taxableValue:10000,rate:101,intraState:true})).toThrow(ValidationError);
-    expect(()=>calculateTax({taxableValue:10000,rate:18,intraState:true,cessRate:101})).toThrow(ValidationError);
-  });
-  it("preserves total tax across the CGST/SGST rounding split",()=>{
-    const tax=calculateTax({taxableValue:9999,rate:5,intraState:true});
-    expect(tax.cgst+tax.sgst).toBe(500); expect(tax.totalTax).toBe(500);
-  });
+  it("splits intra-state GST into CGST and SGST",()=>{const tax=calculateTax({taxableValue:10000,rate:18,intraState:true,supplyType:"b2b",partyStateCode:"10",businessStateCode:"10"});expect(tax.cgst).toBe(900);expect(tax.sgst).toBe(900);expect(tax.igst).toBe(0);expect(tax.totalTax).toBe(1800);expect(tax.total).toBe(11800);});
+  it("uses IGST for inter-state transactions",()=>{const tax=calculateTax({taxableValue:10000,rate:18,intraState:false,supplyType:"b2c",partyStateCode:"09",businessStateCode:"10"});expect(tax.cgst).toBe(0);expect(tax.sgst).toBe(0);expect(tax.igst).toBe(1800);expect(tax.totalTax).toBe(1800);});
+  it("handles cess and zero-rated tax",()=>{const cess=calculateTax({taxableValue:10000,rate:18,intraState:true,cessRate:2});expect(cess.cess).toBe(200);expect(cess.total).toBe(12000);const zero=calculateTax({taxableValue:10000,rate:0,intraState:true,supplyType:"zero_rated"});expect(zero.totalTax).toBe(0);expect(zero.total).toBe(10000);});
+  it("supports exempt and nil-rated supplies only at zero GST",()=>{expect(calculateTax({taxableValue:10000,rate:0,intraState:true,supplyType:"exempt"}).totalTax).toBe(0);expect(calculateTax({taxableValue:10000,rate:0,intraState:true,supplyType:"nil_rated"}).totalTax).toBe(0);});
+  it("supports invoice round-off without changing component tax",()=>{const tax=calculateTax({taxableValue:10000,rate:18,intraState:true,roundOff:-1});expect(tax.totalTax).toBe(1800);expect(tax.preRoundTotal).toBe(11800);expect(tax.total).toBe(11799);expect(tax.roundOff).toBe(-1);});
+  it("reverses every tax component exactly",()=>{const tax=calculateTax({taxableValue:12345,rate:18,intraState:true,cessRate:1});const reversed=reverseTax(tax);expect(reversed.taxableValue).toBe(-tax.taxableValue);expect(reversed.cgst).toBe(-tax.cgst);expect(reversed.sgst).toBe(-tax.sgst);expect(reversed.igst).toBe(-tax.igst);expect(reversed.cess).toBe(-tax.cess);expect(reversed.totalTax).toBe(-tax.totalTax);expect(reversed.total).toBe(-tax.total);});
+  it("rejects invalid tax configuration",()=>{expect(()=>calculateTax({taxableValue:10000,rate:-1,intraState:true})).toThrow(ValidationError);expect(()=>calculateTax({taxableValue:10000,rate:101,intraState:true})).toThrow(ValidationError);expect(()=>calculateTax({taxableValue:10000,rate:18,intraState:true,cessRate:101})).toThrow(ValidationError);expect(()=>calculateTax({taxableValue:10000,rate:18,intraState:false,partyStateCode:"09",businessStateCode:"10"})).not.toThrow();expect(()=>calculateTax({taxableValue:10000,rate:18,intraState:true,partyStateCode:"09",businessStateCode:"10"})).toThrow(ValidationError);});
+  it("rejects non-zero tax on exempt supplies",()=>{expect(()=>calculateTax({taxableValue:10000,rate:18,intraState:true,supplyType:"exempt"})).toThrow(ValidationError);});
+  it("preserves total tax across the CGST/SGST rounding split",()=>{const tax=calculateTax({taxableValue:9999,rate:5,intraState:true});expect(tax.cgst+tax.sgst).toBe(500);expect(tax.totalTax).toBe(500);});
 });
