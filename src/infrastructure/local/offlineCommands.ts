@@ -21,14 +21,40 @@ export interface OfflineCommandInput {
 }
 
 const commandIds = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-const deviceId = () => {
+
+function deviceId() {
   const key = "erp.device.id";
   const existing = window.localStorage.getItem(key);
   if (existing) return existing;
   const value = crypto.randomUUID();
   window.localStorage.setItem(key, value);
   return value;
-};
+}
+
+function stable(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).sort().reduce<Record<string, unknown>>((out, key) => {
+      out[key] = stable((value as Record<string, unknown>)[key]);
+      return out;
+    }, {});
+  }
+  return value;
+}
+
+async function fingerprint(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(stable(value)));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function nextSequence(businessId: string, financialYearId: string) {
+  const db = requireLocalDb();
+  const rows = await db.syncOperations.where("[businessId+financialYearId+status]").anyOf(
+    ["PENDING", "SYNCING", "SYNCED", "FAILED", "CONFLICT", "BLOCKED"].map(status => [businessId, financialYearId, status]),
+  ).toArray();
+  return rows.reduce((max, row) => Math.max(max, Number(row.localSequence ?? 0)), 0) + 1;
+}
 
 async function dispatch(command: OfflineCommandName, repo: ReturnType<typeof createLocalAccountingRepository>, ctx: CommandContext, payload: Record<string, unknown>): Promise<CommandResult> {
   const deps = { repo, ids: { next: commandIds }, clock: { now: () => new Date().toISOString() } };
@@ -47,6 +73,7 @@ async function dispatch(command: OfflineCommandName, repo: ReturnType<typeof cre
 
 export async function executeOfflineCommand(input: OfflineCommandInput): Promise<CommandResult> {
   if (typeof window === "undefined") throw new Error("Offline commands require a browser runtime.");
+  if (!input.businessId || !input.financialYearId || !input.userId) throw new Error("Business, financial year and user are required.");
   const db = requireLocalDb();
   const repo = createLocalAccountingRepository(input.businessId);
   const key = (input.idempotencyKey ?? `${input.commandType.toLowerCase()}-${input.businessId}-${crypto.randomUUID()}`).trim();
@@ -55,13 +82,14 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
   const documentId = input.entityId ?? `${input.commandType.toLowerCase()}-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
   const payload = { ...input.payload, businessId: input.businessId, financialYearId: input.financialYearId, idempotencyKey: key, documentId };
+  const payloadFingerprint = await fingerprint(payload);
   const ctx: CommandContext = {
     businessId: input.businessId,
     financialYearId: input.financialYearId,
     userId: input.userId,
     idempotencyKey: key,
     role: input.role,
-    permissions: input.permissions,
+    permissions: [...input.permissions],
   };
   const operation: SyncOperationRow = {
     id: operationId,
@@ -69,11 +97,16 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
     commandId: operationId,
     businessId: input.businessId,
     financialYearId: input.financialYearId,
+    userId: input.userId,
     deviceId: deviceId(),
     entityType: input.entityType ?? input.commandType,
     entityId: documentId,
     commandType: input.commandType,
+    operationType: "CREATE",
+    idempotencyKey: key,
+    payloadFingerprint,
     payload,
+    localSequence: await nextSequence(input.businessId, input.financialYearId),
     status: "PENDING",
     retryCount: 0,
     createdAt: now,
@@ -85,10 +118,18 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
     db.businesses, db.financialYears, db.accounts, db.parties, db.items, db.units, db.warehouses,
     db.taxConfigurations, db.vouchers, db.voucherLines, db.ledgerEntries, db.stockMovements,
     db.partyAllocations, db.returnDocuments, db.accountingDocuments, db.auditLogs, db.localTransactions,
-    db.syncOperations, db.syncAttempts, db.conflicts, db.syncCheckpoints, db.projections,
+    db.syncOperations, db.syncAttempts, db.conflicts, db.syncCheckpoints, db.projections, db.canonicalMappings,
   ], async () => {
-    const existing = await db.syncOperations.where("commandId").equals(operation.commandId).first();
-    if (existing) return { value: existing.serverResult ?? { operationId: existing.operationId, status: existing.status }, idempotencyKey: key };
+    const existing = await db.syncOperations.where("[businessId+financialYearId+idempotencyKey]").equals([input.businessId, input.financialYearId, key]).first();
+    if (existing) {
+      if (existing.payloadFingerprint !== payloadFingerprint || existing.commandType !== input.commandType) {
+        throw new Error("IDEMPOTENCY_CONFLICT: the same idempotency key was used with different operation data.");
+      }
+      return { value: existing.serverResult ?? { operationId: existing.operationId, status: existing.status }, idempotencyKey: key };
+    }
+
+    // The operation is created inside the same transaction as the domain effects.
+    // If the shared domain command fails, neither the document nor its outbox entry survives.
     await db.syncOperations.put(operation);
     const result = await dispatch(input.commandType, repo, ctx, payload);
     const value = result.value as Record<string, unknown>;
@@ -99,6 +140,7 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
       id: `${input.commandType}:${entityId}`,
       businessId: input.businessId,
       financialYearId: input.financialYearId,
+      userId: input.userId,
       entityType: input.entityType ?? input.commandType,
       entityId,
       lifecycle: "POSTED",
