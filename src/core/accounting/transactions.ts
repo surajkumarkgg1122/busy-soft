@@ -46,7 +46,6 @@ export interface PurchasePostingInput extends BaseTransaction {
   documentId?:string;
   documentPayload?:Record<string,unknown>;
 }
-
 function normalizedPurchaseTaxable(input:PurchasePostingInput):{gross:Money;discount:Money;taxable:Money;discountPercent:number}{
   const taxable=input.taxableValue;
   if(!Number.isSafeInteger(taxable)||taxable<=0)throw new ValidationError("Purchase taxable value must be positive.");
@@ -54,13 +53,14 @@ function normalizedPurchaseTaxable(input:PurchasePostingInput):{gross:Money;disc
   if(!Number.isSafeInteger(discountAmount)||discountAmount<0)throw new ValidationError("Purchase discount amount is invalid.");
   const discountPercent=input.discountPercent??0;
   if(!Number.isFinite(discountPercent)||discountPercent<0||discountPercent>100)throw new ValidationError("Purchase discount percentage must be between 0 and 100.");
-  const gross=input.grossValue??taxable+discountAmount+Math.round(taxable*discountPercent/100);
+  if(input.grossValue===undefined&&discountPercent>0)throw new ValidationError("Gross purchase value is required when a percentage discount is used.");
+  const gross=input.grossValue??taxable+discountAmount;
   if(!Number.isSafeInteger(gross)||gross<=0)throw new ValidationError("Purchase gross value is invalid.");
   const percentDiscount=Math.round(gross*discountPercent/100);
   const totalDiscount=percentDiscount+discountAmount;
   if(totalDiscount>gross)throw new ValidationError("Purchase discount cannot exceed gross value.");
   const derived=gross-totalDiscount;
-  if(input.grossValue!==undefined&&derived!==taxable)throw new ValidationError("Purchase gross, discount and taxable values do not reconcile.");
+  if(derived!==taxable)throw new ValidationError("Purchase gross, discount and taxable values do not reconcile.");
   return{gross,discount:totalDiscount,taxable:derived,discountPercent};
 }
 
@@ -72,7 +72,6 @@ export async function postPurchase(repo:AccountingRepository,input:PurchasePosti
   const paid=input.paidAmount??(input.mode==="credit"?0:0);
   if(!Number.isSafeInteger(paid)||paid<0)throw new ValidationError("Purchase paid amount is invalid.");
   if(input.mode==="credit"&&paid!==0)throw new ValidationError("A credit purchase bill cannot use a cash/bank settlement; record payment through the Payment Engine.");
-  if(input.mode!=="credit"&&!input.supplierId&&paid<0)throw new ValidationError("Invalid purchase settlement.");
   validateStockItems(input.itemMovements);
   const stockTotal=stockValue(input.itemMovements);
   if(stockTotal!==totals.taxable)throw new ValidationError(`Purchase stock value (${stockTotal}) must equal taxable value (${totals.taxable}).`);
@@ -93,25 +92,17 @@ export async function postPurchase(repo:AccountingRepository,input:PurchasePosti
       if(supplierLedger!==input.accountMap.party)throw new ValidationError("Purchase party account does not match the supplier payable ledger account.");
       const termsId=party.features?.paymentTermsId;
       if(termsId){const terms=await tx.getBusinessDocument("paymentTerms",termsId);if(terms&&terms.businessId===input.businessId&&terms.active!==false)dueDate=addCreditDays(input.date,Number(terms.creditDays??0));}
-      if(supplierInvoiceNumber){
-        const key=`${input.supplierId}:${supplierInvoiceNumber.toUpperCase().replace(/\s+/g," ")}`;
-        if(await tx.getBusinessDocument("purchaseSupplierInvoices",key))throw new ValidationError(`Supplier invoice ${supplierInvoiceNumber} is already recorded for this supplier.`);
-      }
+      if(supplierInvoiceNumber){const key=`${input.supplierId}:${supplierInvoiceNumber.toUpperCase().replace(/\s+/g," ")}`;if(await tx.getBusinessDocument("purchaseSupplierInvoices",key))throw new ValidationError(`Supplier invoice ${supplierInvoiceNumber} is already recorded for this supplier.`);}
     } else if(supplierInvoiceNumber){throw new ValidationError("Supplier is required when a supplier invoice number is provided.");}
-    for(const item of input.itemMovements){
-      if(item.serialNumbers?.length){const existing=buildSerialStock(await tx.getStockMovementsForItem(item.itemId,item.warehouseId,input.date),item.itemId,item.warehouseId);const held=new Set(existing.map(x=>x.serialNumber));for(const serial of item.serialNumbers)if(held.has(serial))throw new ValidationError(`Serial number ${serial} is already in stock.`);}
-    }
+    for(const item of input.itemMovements){if(item.serialNumbers?.length){const existing=buildSerialStock(await tx.getStockMovementsForItem(item.itemId,item.warehouseId,input.date),item.itemId,item.warehouseId);const held=new Set(existing.map(x=>x.serialNumber));for(const serial of item.serialNumbers)if(held.has(serial))throw new ValidationError(`Serial number ${serial} is already in stock.`);}}
     const tax=calculateTax({taxableValue:totals.taxable,rate:input.taxRate,intraState:input.intraState,cessRate:input.cessRate});
     const inventoryAccount=required(input.accountMap.inventory,"inventory");
     const paidValue=input.mode==="credit"?0:tax.total;
+    if(!Number.isSafeInteger(paidValue)||paidValue<0||paidValue>tax.total)throw new ValidationError("Purchase paid amount must be between zero and the purchase total.");
     const outstanding=tax.total-paidValue;
     if(outstanding>0&&!input.supplierId)throw new ValidationError("Supplier is required for an unpaid or partially paid purchase.");
     let settlementAccount:string|undefined;
-    if(paidValue>0){
-      settlementAccount=required(input.mode==="cash"?input.accountMap.cash:input.accountMap.bank,"purchase settlement");
-      const account=await tx.getAccount(settlementAccount);
-      if(!account||!account.active||account.type!=="asset")throw new ValidationError("Purchase cash/bank settlement account must be an active asset account.");
-    }
+    if(paidValue>0){settlementAccount=required(input.mode==="cash"?input.accountMap.cash:input.accountMap.bank,"purchase settlement");const account=await tx.getAccount(settlementAccount);if(!account||!account.active||account.type!=="asset")throw new ValidationError("Purchase cash/bank settlement account must be an active asset account.");}
     const lines:VoucherLineInput[]=[debit(inventoryAccount,stockTotal)];
     if(tax.cgst)lines.push(debit(required(input.accountMap.inputCgst,"input CGST"),tax.cgst));
     if(tax.sgst)lines.push(debit(required(input.accountMap.inputSgst,"input SGST"),tax.sgst));
