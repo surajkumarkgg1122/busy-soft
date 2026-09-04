@@ -1,143 +1,100 @@
 "use client";
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { SyncWorker, OFFLINE_ALLOWED_COMMANDS } from "@/lib/offline/syncEngine";
-import type { SyncAggregate, SyncOperation } from "@/types/offline";
+
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useAuthState } from "react-firebase-hooks/auth";
-import { firebaseAuth, firestoreDb } from "@/lib/firebase";
+import { firebaseAuth } from "@/lib/firebase";
 import { useBusiness } from "@/context/BusinessContext";
+import { useSyncState } from "@/infrastructure/local/syncStore";
+import { requireLocalDb, type SyncOperationRow } from "@/infrastructure/local/localDb";
+import { executeOfflineCommand, type OfflineCommandInput, type OfflineCommandName } from "@/infrastructure/local/offlineCommands";
+import { retryFailedOperations, syncPendingOperations } from "@/infrastructure/local/syncEngine";
+import type { SyncAggregate, SyncOperation } from "@/types/offline";
+import type { AccountingPermission } from "@/core/accounting/authorization";
+
+export const OFFLINE_ALLOWED_COMMANDS: readonly OfflineCommandName[] = ["SALE_CREATE", "PURCHASE_CREATE", "RETURN_CREATE", "RECEIPT_CREATE", "PAYMENT_CREATE", "EXPENSE_CREATE"];
 
 export interface SyncProviderValue {
-  worker: SyncWorker | null;
+  worker: null;
   aggregate: SyncAggregate;
   net: SyncAggregate["net"];
   enabled: boolean;
-  // Actions
   flush: (force?: boolean) => Promise<SyncAggregate | null>;
   manualRetry: (operationIds: string[]) => Promise<void>;
-  enqueueCommand: SyncWorker["enqueue"] | null;
-  markConflictResolved: SyncWorker["markConflictResolved"] | null;
-  // Permission cache
+  enqueueCommand: ((args: OfflineCommandInput) => Promise<unknown>) | null;
+  markConflictResolved: ((operationId: string, resolution?: unknown, payload?: Record<string, unknown>) => Promise<void>) | null;
   permissionCacheValid: boolean;
   cachedRole: string;
-  cachedPermissions: Record<string, any>;
+  cachedPermissions: Record<string, unknown>;
   operations: SyncOperation[];
 }
 
 const SyncContext = createContext<SyncProviderValue | null>(null);
+const emptyAggregate: SyncAggregate = { net: "unknown", heartbeat: null, lastSuccessfulSyncAt: null, lastSyncAttemptAt: null, lastSyncError: null, counts: { pending: 0, syncing: 0, failed: 0, conflict: 0, blocked: 0, synced: 0, localOnly: 0, LOCAL_ONLY: 0, PENDING: 0, SYNCING: 0, SYNCED: 0, FAILED: 0, CONFLICT: 0, BLOCKED: 0 }, flushInProgress: false, flushProgressPercent: 100 };
 
-const emptyAggregate: SyncAggregate = {
-  net: "unknown", heartbeat: null, lastSuccessfulSyncAt: null, lastSyncAttemptAt: null, lastSyncError: null,
-  counts: { pending: 0, syncing: 0, failed: 0, conflict: 0, blocked: 0, synced: 0, localOnly: 0, LOCAL_ONLY: 0, PENDING: 0, SYNCING: 0, SYNCED: 0, FAILED: 0, CONFLICT: 0, BLOCKED: 0 },
-  flushInProgress: false, flushProgressPercent: 100,
-};
-
-function isBrowser() { return typeof window !== "undefined"; }
+function toAggregate(state: ReturnType<typeof useSyncState>): SyncAggregate {
+  const net = state.connectionStatus === "ONLINE" ? "online" : state.connectionStatus === "OFFLINE" ? "offline" : state.connectionStatus === "SERVER_UNREACHABLE" ? "server_unreachable" : "unknown";
+  const counts = { pending: state.pendingCount, syncing: state.syncingCount, failed: state.failedCount, conflict: state.conflictCount, blocked: 0, synced: 0, localOnly: 0, LOCAL_ONLY: 0, PENDING: state.pendingCount, SYNCING: state.syncingCount, SYNCED: 0, FAILED: state.failedCount, CONFLICT: state.conflictCount, BLOCKED: 0 };
+  return { net, heartbeat: null, lastSuccessfulSyncAt: state.lastSuccessfulSync, lastSyncAttemptAt: state.lastSyncAttempt, lastSyncError: state.lastSyncError, counts, flushInProgress: state.syncStatus === "SYNCING", flushProgressPercent: state.syncStatus === "SYNCING" ? 50 : 100 };
+}
 
 export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, authLoading] = useAuthState(firebaseAuth);
   const { activeBusinessId } = useBusiness();
-  const [aggregate, setAggregate] = useState<SyncAggregate>(emptyAggregate);
-  const [worker, setWorker] = useState<SyncWorker | null>(null);
+  const state = useSyncState();
   const [operations, setOperations] = useState<SyncOperation[]>([]);
-  const workerRef = useRef<SyncWorker | null>(null);
-  const [permissionCacheValid, setPermissionCacheValid] = useState(false);
   const [cachedRole, setCachedRole] = useState("staff");
-  const [cachedPermissions, setCachedPermissions] = useState<Record<string, any>>({});
-  const enabled = isBrowser() && !!user && !!activeBusinessId && !authLoading;
+  const [cachedPermissions, setCachedPermissions] = useState<Record<string, unknown>>({});
+  const [permissionCacheValid, setPermissionCacheValid] = useState(false);
+  const enabled = typeof window !== "undefined" && !!user && !!activeBusinessId && !authLoading;
 
-  const authTokenFetcher = useCallback(async () => {
-    if (!user) return null;
-    try { return await user.getIdToken(true); } catch { return user.getIdToken(false); }
-  }, [user]);
-
-  const isServerReachable = useCallback(async () => {
+  const loadOperations = useCallback(async () => {
+    if (!enabled) { setOperations([]); return; }
     try {
-      const res = await fetch("/api/heartbeat", { method: "GET", cache: "no-store", headers: { "X-Ping": "1" } });
-      return res.ok || res.status === 401; // 401 means server is reachable, just needs re-auth.
-    } catch {
-      // Fallback: navigator.onLine is less reliable than heartbeat, but better than nothing.
-      if (typeof navigator !== "undefined") return navigator.onLine;
-      return false;
-    }
-  }, []);
+      const rows = await requireLocalDb().syncOperations.where("businessId").equals(activeBusinessId!).sortBy("createdAt");
+      setOperations(rows.reverse() as unknown as SyncOperation[]);
+    } catch { setOperations([]); }
+  }, [enabled, activeBusinessId]);
 
-  // Set up worker when user/business ready
+  useEffect(() => { void loadOperations(); const timer = window.setInterval(() => void loadOperations(), 5000); return () => window.clearInterval(timer); }, [loadOperations, state.pendingCount, state.failedCount, state.conflictCount]);
+
   useEffect(() => {
-    if (!enabled) {
-      if (workerRef.current) { workerRef.current.dispose(); workerRef.current = null; setWorker(null); }
-      return;
-    }
-    if (workerRef.current) return;
-    let alive = true;
-    (async () => {
-      // Browser Dexie worker; inject business context
-      const { getOfflineDb } = await import("@/lib/offline/sqliteAccountingRepository");
-      const { SyncWorker } = await import("@/lib/offline/syncEngine");
-      const w = new SyncWorker({
-        userId: user!.uid,
-        businessId: activeBusinessId!,
-        authTokenFetcher,
-        onStateChange: (agg) => { if (alive) setAggregate(agg); },
-        isServerReachable,
-      }, getOfflineDb(user!.uid, activeBusinessId!));
-      await w.init();
-      // Initial load of operations for Sync Center
-      const db = w.getDb();
-      const initial = await db.syncOperations.where("businessId").equals(activeBusinessId!).toArray();
-      setOperations(initial);
-      const listener = db.syncOperations.where("businessId").equals(activeBusinessId!);
-      (db.syncOperations as any).hook("creating", () => { /* no-op; we poll below */ });
-      workerRef.current = w;
-      setWorker(w);
-      await w.flush().catch(() => {});
-      const interval = setInterval(async () => {
-        if (!alive) return;
-        const dbNow = workerRef.current?.getDb();
-        if (dbNow) setOperations(await dbNow.syncOperations.where("businessId").equals(activeBusinessId!).sortBy("createdAt").then(arr => arr.reverse()));
-        void workerRef.current?.flush();
-      }, 15_000);
-      const netListener = () => { if (navigator.onLine) workerRef.current?.scheduleFlush(500); };
-      window.addEventListener?.("online", netListener);
-      window.addEventListener?.("offline", netListener);
-      // Cache permissions from heartbeat once
+    if (!enabled) return;
+    const run = async () => {
       try {
-        const hb = await fetch("/api/heartbeat", { cache: "no-store" }).then(r => r.ok ? r.json() : null);
-        if (hb) {
-          setCachedRole(hb.membership?.role ?? "staff");
-          setCachedPermissions(hb.permissions ?? {});
-          setPermissionCacheValid(new Date(hb.authCacheExpiresAt).getTime() > Date.now());
-        }
-      } catch { /* offline; will populate later */ }
-      return () => {
-        alive = false;
-        clearInterval(interval);
-        window.removeEventListener?.("online", netListener);
-        window.removeEventListener?.("offline", netListener);
-      };
-    })();
-    return () => {};
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, user?.uid, activeBusinessId]);
+        const response = await fetch("/api/heartbeat", { cache: "no-store" });
+        if (!response.ok) return;
+        const hb = await response.json();
+        setCachedRole(String(hb.membership?.role ?? "staff"));
+        setCachedPermissions((hb.permissions ?? {}) as Record<string, unknown>);
+        setPermissionCacheValid(Boolean(hb.authCacheExpiresAt) && new Date(hb.authCacheExpiresAt).getTime() > Date.now());
+      } catch { /* offline: retain last verified cache */ }
+    };
+    void run();
+  }, [enabled, activeBusinessId, user?.uid]);
 
-  const flush = useCallback(async (force = false) => {
-    return worker ? worker.flush(force) : null;
-  }, [worker]);
-
+  const flush = useCallback(async () => { await syncPendingOperations({ businessId: activeBusinessId ?? undefined }); await loadOperations(); return toAggregate(state); }, [activeBusinessId, loadOperations, state]);
   const manualRetry = useCallback(async (operationIds: string[]) => {
-    return worker?.manualRetry(operationIds);
-  }, [worker]);
+    const db = requireLocalDb();
+    const now = new Date().toISOString();
+    for (const id of operationIds) await db.syncOperations.update(id, { status: "PENDING", retryCount: 0, nextAttemptAt: now, lastError: undefined, errorClass: undefined, updatedAt: now });
+    await syncPendingOperations({ businessId: activeBusinessId ?? undefined });
+    await loadOperations();
+  }, [activeBusinessId, loadOperations]);
+  const enqueueCommand = useCallback(async (args: OfflineCommandInput) => executeOfflineCommand(args), []);
+  const markConflictResolved = useCallback(async (operationId: string, _resolution?: unknown, payload?: Record<string, unknown>) => {
+    const db = requireLocalDb();
+    const operation = await db.syncOperations.get(operationId);
+    if (!operation) throw new Error("Synchronization operation not found.");
+    if (operation.status !== "CONFLICT") throw new Error("Only conflicted operations can be resolved.");
+    if (payload) await db.syncOperations.update(operationId, { payload, status: "PENDING", retryCount: 0, nextAttemptAt: new Date().toISOString(), lastError: undefined, errorClass: undefined, updatedAt: new Date().toISOString() });
+    const conflicts = await db.conflicts.where("operationId").equals(operationId).toArray();
+    for (const conflict of conflicts) await db.conflicts.update(conflict.id, { status: "RESOLVED", resolvedAt: new Date().toISOString() });
+    await syncPendingOperations({ businessId: activeBusinessId ?? undefined });
+    await loadOperations();
+  }, [activeBusinessId, loadOperations]);
 
-  const enqueueCommand: any = useCallback(async (args: any) => worker?.enqueue(args), [worker]);
-
-  const markConflictResolved: any = useCallback(async (opid: string, resolution: any, payload?: any) => worker?.markConflictResolved(opid, resolution, payload), [worker]);
-
-  const value = useMemo<SyncProviderValue>(() => ({
-    worker, aggregate, net: aggregate.net, enabled,
-    flush, manualRetry, enqueueCommand, markConflictResolved,
-    permissionCacheValid, cachedRole, cachedPermissions, operations,
-  }), [worker, aggregate, enabled, flush, manualRetry, enqueueCommand, markConflictResolved, permissionCacheValid, cachedRole, cachedPermissions, operations]);
-
-  return React.createElement(SyncContext.Provider, { value }, children);
+  const value = useMemo<SyncProviderValue>(() => ({ worker: null, aggregate: toAggregate(state), net: toAggregate(state).net, enabled, flush, manualRetry, enqueueCommand, markConflictResolved, permissionCacheValid, cachedRole, cachedPermissions, operations }), [state, enabled, flush, manualRetry, enqueueCommand, markConflictResolved, permissionCacheValid, cachedRole, cachedPermissions, operations]);
+  return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
 };
 
 export function useSync(): SyncProviderValue {
@@ -145,5 +102,3 @@ export function useSync(): SyncProviderValue {
   if (!ctx) throw new Error("useSync must be used within SyncProvider. Wrap <SyncProvider> in your app layout.");
   return ctx;
 }
-
-export { OFFLINE_ALLOWED_COMMANDS };
