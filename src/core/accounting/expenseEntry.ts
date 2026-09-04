@@ -26,8 +26,12 @@ export async function postExpenseEntry(repo:AccountingRepository,input:ExpenseEn
   const settlement=input.mode==="cash"?required(input.cashAccountId,"cash account"):input.mode==="bank"?required(input.bankAccountId,"bank account"):required(input.payableAccountId,"payable account");
 
   return repo.runInTransaction(async tx=>{
-    const existingDocument=await tx.getBusinessDocument("expenses",input.documentId);
-    if(existingDocument)throw new ValidationError(`Expense document ${input.documentId} already exists.`);
+    const existing=await tx.getVoucherByIdempotencyKey(input.businessId,input.financialYearId,input.idempotencyKey);
+    if(existing){
+      if(existing.referenceType!=="expense"||existing.referenceId!==input.documentId)throw new ValidationError("Expense idempotency key is already used for another accounting operation.");
+      return postIdempotentVoucher(tx,{businessId:input.businessId,financialYearId:input.financialYearId,voucherType:"EXPENSE",prefix:"EX",date:input.date,narration:input.narration,createdBy:input.userId,referenceType:"expense",referenceId:input.documentId,lines:await tx.getVoucherLines(existing.id),idempotencyKey:input.idempotencyKey},deps);
+    }
+    if(await tx.getBusinessDocument("expenses",input.documentId))throw new ValidationError(`Expense document ${input.documentId} already exists.`);
     const expenseAccount=await tx.getAccount(input.expenseAccountId);
     if(!expenseAccount||!expenseAccount.active||expenseAccount.type!=="expense")throw new ValidationError("Expense account does not exist or is inactive.");
     const settlementAccount=await tx.getAccount(settlement);
