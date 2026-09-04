@@ -1,47 +1,15 @@
 {
   "indexes": [
-    {
-      "collectionGroup": "financialYears",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "locked", "order": "ASCENDING" },
-        { "fieldPath": "startDate", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "productionVouchers",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "financialYearId", "order": "ASCENDING" },
-        { "fieldPath": "date", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "productionVouchers",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "businessId", "order": "ASCENDING" },
-        { "fieldPath": "itemId", "order": "ASCENDING" },
-        { "fieldPath": "date", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "manufacturingBomVersions",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "itemId", "order": "ASCENDING" },
-        { "fieldPath": "version", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "productionPlans",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "businessId", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "dueDate", "order": "ASCENDING" }
-      ]
-    }
+    {"collectionGroup":"financialYears","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"locked","order":"ASCENDING"},{"fieldPath":"startDate","order":"DESCENDING"}]},
+    {"collectionGroup":"productionVouchers","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"financialYearId","order":"ASCENDING"},{"fieldPath":"date","order":"DESCENDING"}]},
+    {"collectionGroup":"productionVouchers","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"businessId","order":"ASCENDING"},{"fieldPath":"itemId","order":"ASCENDING"},{"fieldPath":"date","order":"DESCENDING"}]},
+    {"collectionGroup":"manufacturingBomVersions","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"itemId","order":"ASCENDING"},{"fieldPath":"version","order":"DESCENDING"}]},
+    {"collectionGroup":"productionPlans","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"businessId","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"dueDate","order":"ASCENDING"}]},
+    {"collectionGroup":"ledgerEntries","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"partyId","order":"ASCENDING"},{"fieldPath":"date","order":"DESCENDING"}]},
+    {"collectionGroup":"partyAllocations","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"businessId","order":"ASCENDING"},{"fieldPath":"partyId","order":"ASCENDING"},{"fieldPath":"date","order":"DESCENDING"}]},
+    {"collectionGroup":"partyGroups","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"active","order":"ASCENDING"},{"fieldPath":"name","order":"ASCENDING"}]},
+    {"collectionGroup":"paymentTerms","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"active","order":"ASCENDING"},{"fieldPath":"name","order":"ASCENDING"}]},
+    {"collectionGroup":"partyPriceLevels","queryScope":"COLLECTION_GROUP","fields":[{"fieldPath":"active","order":"ASCENDING"},{"fieldPath":"name","order":"ASCENDING"}]}
   ],
   "fieldOverrides": []
 }
