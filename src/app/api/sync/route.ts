@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { getAdminServices } from "@/infrastructure/firebase/admin";
+import { resolveFinancialYear } from "@/core/accounting/financialYear";
 import { POST as postSale } from "@/app/api/accounting/sales/route";
 import { POST as postPurchase } from "@/app/api/accounting/purchases/route";
 import { POST as postExpense } from "@/app/api/accounting/expenses/route";
@@ -10,7 +12,6 @@ import { POST as postPurchaseReturn } from "@/app/api/accounting/purchase-return
 export const runtime = "nodejs";
 
 type CommandType = "SALE_CREATE" | "PURCHASE_CREATE" | "RECEIPT_CREATE" | "PAYMENT_CREATE" | "EXPENSE_CREATE" | "SALE_RETURN_CREATE" | "PURCHASE_RETURN_CREATE";
-
 const handlers: Record<CommandType, (request: Request) => Promise<Response>> = {
   SALE_CREATE: postSale,
   PURCHASE_CREATE: postPurchase,
@@ -21,20 +22,15 @@ const handlers: Record<CommandType, (request: Request) => Promise<Response>> = {
   PURCHASE_RETURN_CREATE: postPurchaseReturn,
 };
 
-function error(message: string, status = 400) {
-  return NextResponse.json({ success: false, error: message }, { status });
-}
+function error(message: string, status = 400) { return NextResponse.json({ success: false, error: message }, { status }); }
 
-/**
- * Trusted sync gateway. It deliberately delegates each operation to the
- * existing accounting HTTP handler instead of reimplementing transaction
- * validation or posting rules here. The original bearer token is preserved,
- * so the destination handler performs its normal server-side authorization.
- */
+/** Single synchronization boundary. All business logic remains in existing application/domain handlers. */
 export async function POST(request: Request) {
   try {
-    const auth = request.headers.get("authorization") ?? "";
-    if (!auth.startsWith("Bearer ")) return error("Authentication is required.", 401);
+    const { auth, db } = getAdminServices();
+    const authHeader = request.headers.get("authorization") ?? "";
+    if (!authHeader.startsWith("Bearer ")) return error("Authentication is required.", 401);
+    const token = await auth.verifyIdToken(authHeader.slice(7));
     const body = await request.json() as Record<string, unknown>;
     const commandType = String(body.commandType ?? "") as CommandType;
     const handler = handlers[commandType];
@@ -43,32 +39,54 @@ export async function POST(request: Request) {
     const businessId = String(body.businessId ?? "").trim();
     const financialYearId = String(body.financialYearId ?? "").trim();
     const idempotencyKey = String(body.idempotencyKey ?? "").trim();
+    const operationId = String(body.operationId ?? "").trim();
+    const deviceId = String(body.deviceId ?? "").trim();
     const payload = body.payload;
-    if (!businessId || !financialYearId || !idempotencyKey || !payload || typeof payload !== "object") {
-      return error("businessId, financialYearId, idempotencyKey and payload are required.", 400);
-    }
+    if (!businessId || !financialYearId || !idempotencyKey || !operationId || !deviceId || !payload || typeof payload !== "object") return error("businessId, financialYearId, idempotencyKey, operationId, deviceId and payload are required.", 400);
     if (idempotencyKey.length < 16 || idempotencyKey.length > 128) return error("Invalid idempotency key.", 400);
+    if (operationId.length > 128 || deviceId.length > 128) return error("Invalid synchronization metadata.", 400);
+
+    const businessRef = db.collection("businesses").doc(businessId);
+    const membershipSnap = await businessRef.collection("members").doc(token.uid).get();
+    if (!membershipSnap.exists) return error("You are not a member of this business.", 403);
+    const membership = membershipSnap.data() as { status?: string };
+    if (membership.status !== "active") return error("Your business membership is not active.", 403);
+
+    const data = payload as Record<string, unknown>;
+    if (String(data.businessId ?? businessId) !== businessId) return error("Payload business does not match synchronization context.", 403);
+    if (String(data.financialYearId ?? financialYearId) !== financialYearId) return error("Payload financial year does not match synchronization context.", 409);
+
+    // Where a command carries a transaction date, prove that the requested FY is
+    // the FY the server would derive for this business. The downstream handler
+    // still performs its own setup, authorization and domain validation.
+    const date = typeof data.date === "string" ? data.date : undefined;
+    if (date) {
+      const businessSnap = await businessRef.get();
+      if (!businessSnap.exists) return error("Business does not exist.", 404);
+      const startMonth = Number((businessSnap.data() as { financialYearStartMonth?: number }).financialYearStartMonth ?? 4);
+      const derivedFy = resolveFinancialYear(date, startMonth).id;
+      if (derivedFy !== financialYearId) return error("Financial year does not match the transaction date.", 409);
+    }
 
     const delegatedPayload = {
-      ...(payload as Record<string, unknown>),
+      ...data,
       businessId,
       financialYearId,
       idempotencyKey,
-      deviceId: typeof body.deviceId === "string" ? body.deviceId : undefined,
-      operationId: typeof body.operationId === "string" ? body.operationId : undefined,
+      deviceId,
+      operationId,
+      syncCommandId: String(body.commandId ?? operationId),
     };
     const delegated = new Request(request.url, {
       method: "POST",
-      headers: { "authorization": auth, "content-type": "application/json", "x-busy-soft-sync": "1" },
+      headers: { authorization: authHeader, "content-type": "application/json", "x-busy-soft-sync": "1", "x-busy-soft-operation-id": operationId },
       body: JSON.stringify(delegatedPayload),
     });
     const response = await handler(delegated);
     const responseBody = await response.text();
-    return new NextResponse(responseBody, {
-      status: response.status,
-      headers: { "content-type": response.headers.get("content-type") ?? "application/json" },
-    });
+    return new NextResponse(responseBody, { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } });
   } catch (cause) {
-    return error(cause instanceof Error ? cause.message : "Synchronization failed.", 500);
+    const message = cause instanceof Error ? cause.message : "Synchronization failed.";
+    return error(message, /token|authentication|credential/i.test(message) ? 401 : 500);
   }
 }
