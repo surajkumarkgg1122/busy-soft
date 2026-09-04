@@ -15,11 +15,16 @@ export async function postIdempotentVoucher(
     if (existing.businessId !== input.businessId || existing.financialYearId !== input.financialYearId || existing.voucherType !== input.voucherType) {
       throw new ValidationError("Idempotency key is already used by a different accounting operation.");
     }
-    // Older vouchers may not have a fingerprint. Refuse ambiguous replay instead of guessing.
     if (!existing.idempotencyFingerprint) throw new ValidationError("Existing idempotency record has no payload fingerprint; create a new idempotency key.");
     accountingIdempotency.assertCompatible(existing.idempotencyFingerprint, fingerprint);
     const lines = await tx.getVoucherLines(existing.id);
-    return { voucher: existing, lines, ledgerEntries: lines.map(l => ({ ...l, financialYearId: existing.financialYearId, date: existing.date, voucherType: existing.voucherType, voucherNumber: existing.voucherNumber, createdAt: existing.createdAt })), stockMovements: await tx.getStockMovementsForSource(existing.id) };
+    return {
+      voucher: existing,
+      lines,
+      ledgerEntries: lines.map(l => ({ ...l, financialYearId: existing.financialYearId, date: existing.date, voucherType: existing.voucherType, voucherNumber: existing.voucherNumber, createdAt: existing.createdAt })),
+      stockMovements: await tx.getStockMovementsForSource(existing.id),
+      idempotentReplay: true,
+    } as PostingResult & { idempotentReplay: true };
   }
   const result = await postVoucher(tx, input, deps);
   result.voucher.idempotencyKey = input.idempotencyKey;
