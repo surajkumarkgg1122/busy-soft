@@ -2,6 +2,7 @@ import type { AccountingRepository, Money, PostingResult } from "@/core/accounti
 import type { AccountingPermission } from "@/core/accounting/authorization";
 import { assertAuthorized, assertTrustedPostingBoundary } from "@/core/accounting/authorization";
 import { postSaleEntry } from "@/core/accounting/saleEntry";
+import { resolveFinancialYear } from "@/core/accounting/financialYear";
 import { ValidationError } from "@/core/accounting/errors";
 import { firebaseAuth } from "@/lib/firebase";
 
@@ -11,11 +12,8 @@ export interface CreateSaleItem { itemId:string; quantity:number; warehouseId?:s
 export interface CreateSaleInput { date:string; customerId?:string; paymentMode:"cash"|"bank"|"credit"; grossValue:Money; discountPercent?:number; discountAmount?:Money; paidAmount?:Money; bankAccountId?:string; taxRate:number; intraState:boolean; cessRate?:number; accountMap:Record<string,string|undefined>; itemMovements:CreateSaleItem[]; narration?:string; documentId?:string; documentPayload?:Record<string,unknown>; }
 export interface SalesWorkspaceData { customers: Record<string, unknown>[]; items: Record<string, unknown>[]; sales: Record<string, unknown>[]; bankAccounts: Record<string, unknown>[]; }
 
-function currentFinancialYearId(date:string): string {
-  const year = Number(date.slice(0, 4));
-  const month = Number(date.slice(5, 7));
-  const start = month >= 4 ? year : year - 1;
-  return `fy-${start}-${String(start + 1).slice(-2)}`;
+export function currentFinancialYearId(date:string, startMonth = 4): string {
+  return resolveFinancialYear(date, startMonth).id;
 }
 
 async function getAuthToken(): Promise<string> {
@@ -59,5 +57,3 @@ export async function createSale(deps:SalesApplicationDeps,ctx:CreateSaleContext
   if(input.paymentMode==="bank"&&(input.paidAmount??0)>0&&!input.bankAccountId)throw new ValidationError("Bank account is required for bank/online payment.");
   return postSaleEntry(deps.repo,{...input,accountMap:{party:input.accountMap.party!,sales:input.accountMap.sales!,cash:input.accountMap.cash,bank:input.accountMap.bank,outputCgst:input.accountMap.outputCgst,outputSgst:input.accountMap.outputSgst,outputIgst:input.accountMap.outputIgst,outputCess:input.accountMap.outputCess,inventory:input.accountMap.inventory!,cogs:input.accountMap.cogs!},idempotencyKey:ctx.idempotencyKey,businessId:ctx.businessId,userId:ctx.userId,financialYearId:ctx.financialYearId},deps);
 }
-
-export { currentFinancialYearId };
