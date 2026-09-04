@@ -1,4 +1,4 @@
-import type { AccountingRepository, AccountingTransaction, LedgerEntry, Money, PartyAllocation, Voucher } from "./types";
+import type { AccountingRepository, AccountingTransaction, LedgerEntry, Money, PartyAllocation } from "./types";
 import { ValidationError } from "./errors";
 
 export type PartyRole = "customer" | "supplier";
@@ -10,7 +10,7 @@ export function validateAllocation(input:Omit<PartyAllocation,"id">):void {
   if(!input.businessId||!input.partyId||!input.fromVoucherId||!input.toVoucherId||input.fromVoucherId===input.toVoucherId) throw new ValidationError("Invalid party allocation references.");
   safeMoney(input.amount,"Allocation amount"); if(input.amount<=0) throw new ValidationError("Allocation amount must be positive.");
   if(!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new ValidationError("Allocation date must be YYYY-MM-DD.");
-  if(!input.userId&&!(input as unknown as {createdBy?:string}).createdBy) throw new ValidationError("Allocation creator is required.");
+  if(!input.userId) throw new ValidationError("Allocation creator is required.");
   if(!input.idempotencyKey) throw new ValidationError("Allocation idempotency key is required.");
 }
 export function calculatePartyNet(entries:readonly Pick<LedgerEntry,"partyId"|"debit"|"credit">[],partyId:string):Money { return entries.filter(e=>e.partyId===partyId).reduce((s,e)=>s+e.debit-e.credit,0); }
@@ -18,10 +18,9 @@ export function calculatePartyLedger(entries:readonly LedgerEntry[],partyId:stri
 export function allocateAgainstOutstanding(requested:Money,documents:readonly OutstandingDocument[]){safeMoney(requested,"Requested allocation");let remaining=requested;const allocations:Array<{voucherId:string;amount:Money}>=[];for(const d of documents){safeMoney(d.outstanding,`Outstanding amount for ${d.voucherNumber}`);if(remaining<=0)break;if(d.outstanding<=0)continue;const amount=Math.min(remaining,d.outstanding);allocations.push({voucherId:d.voucherId,amount});remaining-=amount;}return{allocations,unallocated:remaining};}
 
 export async function validateAndBuildAllocations(tx:AccountingTransaction,input:{businessId:string;partyId:string;fromVoucherId:string;toVoucherId:string;amount:Money;date:string;userId:string;id:string;createdAt:string;idempotencyKey:string}):Promise<PartyAllocation>{
-  validateAllocation(input); const fy=await tx.getFinancialYear((await tx.getVoucher(input.fromVoucherId))?.financialYearId||"");
-  const from=await tx.getVoucher(input.fromVoucherId),to=await tx.getVoucher(input.toVoucherId);
+  validateAllocation(input); const from=await tx.getVoucher(input.fromVoucherId),to=await tx.getVoucher(input.toVoucherId);
   if(!from||!to) throw new ValidationError("Both allocation vouchers must exist.");
-  if(!fy||fy.businessId!==input.businessId||fy.locked) throw new ValidationError("Allocation financial year is unavailable or locked.");
+  const fy=await tx.getFinancialYear(from.financialYearId); if(!fy||fy.businessId!==input.businessId||fy.locked) throw new ValidationError("Allocation financial year is unavailable or locked.");
   if(from.businessId!==input.businessId||to.businessId!==input.businessId) throw new ValidationError("Allocation voucher business mismatch.");
   if(from.status!=="posted"||to.status!=="posted") throw new ValidationError("Only posted vouchers can be allocated.");
   if(from.financialYearId!==to.financialYearId) throw new ValidationError("Allocation vouchers must belong to the same financial year.");
@@ -39,11 +38,12 @@ export async function validateAndBuildAllocations(tx:AccountingTransaction,input
 }
 
 export function buildPartyReconciliation(entries:readonly LedgerEntry[],allocations:readonly PartyAllocation[],partyId:string,role:PartyRole):PartyReconciliation{
-  const ledger=calculatePartyLedger(entries,partyId); const relevant=allocations.filter(a=>a.partyId===partyId); const allocated=relevant.reduce((s,a)=>s+a.amount,0);
-  const expectedDirection=role==="customer"?1:-1; const receivableOrPayable=Math.max(ledger.net*expectedDirection,0); const opposite=Math.max(-ledger.net*expectedDirection,0);
-  const billOutstanding=Math.max(receivableOrPayable-allocated,0); const advance=opposite+Math.max(allocated-receivableOrPayable,0);
-  const expectedUnsettled=receivableOrPayable+opposite; const reconciled=Math.abs(ledger.net*expectedDirection-(billOutstanding-advance))===0;
-  return{partyId,ledgerDebit:ledger.debit,ledgerCredit:ledger.credit,ledgerNet:ledger.net,allocated,billOutstanding,advance,reconciled:reconciled&&allocated<=expectedUnsettled};
+  const own=entries.filter(e=>e.partyId===partyId); const ledgerDebit=own.reduce((s,e)=>s+e.debit,0),ledgerCredit=own.reduce((s,e)=>s+e.credit,0),ledgerNet=ledgerDebit-ledgerCredit;
+  const byVoucher=new Map<string,number>(); for(const a of allocations.filter(a=>a.partyId===partyId)){byVoucher.set(a.fromVoucherId,(byVoucher.get(a.fromVoucherId)||0)+a.amount);byVoucher.set(a.toVoucherId,(byVoucher.get(a.toVoucherId)||0)+a.amount);}
+  const voucherNet=new Map<string,number>(); for(const e of own)voucherNet.set(e.voucherId,(voucherNet.get(e.voucherId)||0)+e.debit-e.credit);
+  let billOutstanding=0,advance=0,allocated=0; for(const [voucherId,net] of voucherNet){const used=byVoucher.get(voucherId)||0; allocated+=used; const remaining=Math.max(Math.abs(net)-used,0); const receivableDirection=role==="customer"?net>0:net<0; if(receivableDirection)billOutstanding+=remaining;else advance+=remaining;}
+  const expectedNet=role==="customer"?billOutstanding+allocated/2-advance:advance-billOutstanding-allocated/2;
+  return{partyId,ledgerDebit,ledgerCredit,ledgerNet,allocated:allocated/2,billOutstanding,advance,reconciled:expectedNet===ledgerNet};
 }
 
 export async function postPartyAllocation(repo:AccountingRepository,input:{businessId:string;partyId:string;fromVoucherId:string;toVoucherId:string;amount:Money;date:string;userId:string;idempotencyKey:string},deps:{ids:{next(prefix:string):string};clock:{now():string}}):Promise<PartyAllocation>{
