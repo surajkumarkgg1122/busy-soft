@@ -1,9 +1,9 @@
 name: CI
 on:
   push:
-    branches: [master]
+    branches: [master, production-hardening-2026-09]
   pull_request:
-    branches: [master]
+    branches: [master, production-hardening-2026-09]
 permissions:
   contents: read
 jobs:
@@ -17,6 +17,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm install --no-audit --no-fund
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
+      - name: Lint gate
+        run: npm run lint
+      - name: Critical production QA gate
+        run: npm run test:critical
+      - name: Full test suite
+        run: npm test
+      - name: Production build gate
+        run: npm run build
