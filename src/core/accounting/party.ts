@@ -42,8 +42,11 @@ export function buildPartyReconciliation(entries:readonly LedgerEntry[],allocati
   const byVoucher=new Map<string,number>(); for(const a of allocations.filter(a=>a.partyId===partyId)){byVoucher.set(a.fromVoucherId,(byVoucher.get(a.fromVoucherId)||0)+a.amount);byVoucher.set(a.toVoucherId,(byVoucher.get(a.toVoucherId)||0)+a.amount);}
   const voucherNet=new Map<string,number>(); for(const e of own)voucherNet.set(e.voucherId,(voucherNet.get(e.voucherId)||0)+e.debit-e.credit);
   let billOutstanding=0,advance=0,allocated=0; for(const [voucherId,net] of voucherNet){const used=byVoucher.get(voucherId)||0; allocated+=used; const remaining=Math.max(Math.abs(net)-used,0); const receivableDirection=role==="customer"?net>0:net<0; if(receivableDirection)billOutstanding+=remaining;else advance+=remaining;}
-  const expectedNet=role==="customer"?billOutstanding+allocated/2-advance:advance-billOutstanding-allocated/2;
-  return{partyId,ledgerDebit,ledgerCredit,ledgerNet,allocated:allocated/2,billOutstanding,advance,reconciled:expectedNet===ledgerNet};
+  // Allocations are settlement metadata; they do not change the accounting ledger net.
+  // Each allocation is attached to two vouchers, so billOutstanding - advance is the amount that must reconcile to ledgerNet.
+  const expectedNet=role==="customer"?billOutstanding-advance:advance-billOutstanding;
+  const uniqueAllocated=[...new Set(allocations.filter(a=>a.partyId===partyId).map(a=>a.id))].reduce((s,id)=>s+(allocations.find(a=>a.id===id)?.amount??0),0);
+  return{partyId,ledgerDebit,ledgerCredit,ledgerNet,allocated:uniqueAllocated,billOutstanding,advance,reconciled:expectedNet===ledgerNet};
 }
 
 export async function postPartyAllocation(repo:AccountingRepository,input:{businessId:string;partyId:string;fromVoucherId:string;toVoucherId:string;amount:Money;date:string;userId:string;idempotencyKey:string},deps:{ids:{next(prefix:string):string};clock:{now():string}}):Promise<PartyAllocation>{

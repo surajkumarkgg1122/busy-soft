@@ -3,51 +3,105 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function isUser(userId) { return signedIn() && request.auth.uid == userId; }
-    function isBusinessMember(businessId) { return signedIn() && exists(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)) && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.status == 'active'; }
-    function memberRole(businessId) { return get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.role; }
+    function memberDoc(businessId) { return get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)); }
+    function isBusinessMember(businessId) { return signedIn() && memberDoc(businessId).exists() && memberDoc(businessId).data.status == 'active'; }
+    function memberRole(businessId) { return memberDoc(businessId).data.role; }
     function hasRole(businessId, roles) { return isBusinessMember(businessId) && memberRole(businessId) in roles; }
-    function hasPermission(businessId, permission) { return isBusinessMember(businessId) && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.permissions[permission] == true; }
-    function hasPermissionAction(businessId, module, action, legacyPermission) { return isBusinessMember(businessId) && (memberRole(businessId) in ['owner', 'admin'] || get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.permissions.get(module, {}).get(action, false) == true || (action == 'view' && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.permissions.get(legacyPermission, false) == true)); }
+    function hasPermission(businessId, permission) { return isBusinessMember(businessId) && memberDoc(businessId).data.permissions[permission] == true; }
+    function hasPermissionAction(businessId, module, action, legacyPermission) { return isBusinessMember(businessId) && (memberRole(businessId) in ['owner', 'admin'] || memberDoc(businessId).data.permissions.get(module, {}).get(action, false) == true || (action == 'view' && memberDoc(businessId).data.permissions.get(legacyPermission, false) == true)); }
     function ownerOrAdmin(businessId) { return hasRole(businessId, ['owner', 'admin']); }
-    match /users/{userId} { allow read: if isUser(userId); allow create: if isUser(userId); allow update: if isUser(userId); allow delete: if false; match /businessMemberships/{businessId} { allow read: if isUser(userId); allow create: if isUser(userId) && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == businessId && request.resource.data.status == 'active' && (!request.resource.data.keys().hasAny(['invitationId']) || (exists(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)) && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.businessId == businessId && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.invitedEmail == request.auth.token.email && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending')); allow update: if ownerOrAdmin(businessId) && resource.data.role != 'owner' && request.resource.data.uid == userId && request.resource.data.businessId == businessId; allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner'; } }
-    match /licenses/{licenseId} { allow read: if signedIn() && resource.data.businessId != null && isBusinessMember(resource.data.businessId); allow create, update, delete: if false; }
-    match /invitations/{invitationId} { allow create: if signedIn() && request.resource.data.invitationId == invitationId && request.resource.data.status == 'pending' && request.resource.data.invitedBy == request.auth.uid && ownerOrAdmin(request.resource.data.businessId); allow read: if signedIn() && (request.auth.token.email == resource.data.invitedEmail || ownerOrAdmin(resource.data.businessId)); allow update: if signedIn() && (ownerOrAdmin(resource.data.businessId) || (request.auth.token.email == resource.data.invitedEmail && resource.data.status == 'pending' && request.resource.data.businessId == resource.data.businessId && request.resource.data.invitedEmail == resource.data.invitedEmail && request.resource.data.status in ['accepted', 'rejected'])); allow delete: if signedIn() && ownerOrAdmin(resource.data.businessId); }
+    function sameBusinessOnCreate(businessId) { return request.resource.data.businessId == businessId; }
+    function sameBusinessOnUpdate(businessId) { return resource.data.businessId == businessId && request.resource.data.businessId == businessId; }
+    function immutableBusinessId(businessId) { return sameBusinessOnUpdate(businessId); }
+    function canReadModule(businessId, module, legacyPermission) { return hasPermissionAction(businessId, module, 'view', legacyPermission); }
+
+    match /users/{userId} {
+      allow read: if isUser(userId);
+      allow create: if isUser(userId) && request.resource.data.uid == request.auth.uid;
+      allow update: if isUser(userId) && resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid;
+      allow delete: if false;
+      match /businessMemberships/{businessId} {
+        allow read: if isUser(userId);
+        allow create: if isUser(userId) && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == businessId && request.resource.data.status == 'active' && (!request.resource.data.keys().hasAny(['invitationId']) || (exists(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)) && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.businessId == businessId && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.invitedEmail == request.auth.token.email && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending'));
+        allow update: if ownerOrAdmin(businessId) && resource.data.role != 'owner' && resource.data.uid == userId && request.resource.data.uid == userId && resource.data.businessId == businessId && request.resource.data.businessId == businessId;
+        allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
+      }
+    }
+
+    match /licenses/{licenseId} {
+      allow read: if signedIn() && resource.data.businessId != null && isBusinessMember(resource.data.businessId);
+      allow create, update, delete: if false;
+    }
+
+    match /invitations/{invitationId} {
+      allow create: if signedIn() && request.resource.data.invitationId == invitationId && request.resource.data.status == 'pending' && request.resource.data.invitedBy == request.auth.uid && ownerOrAdmin(request.resource.data.businessId) && request.resource.data.businessId != null;
+      allow read: if signedIn() && (request.auth.token.email == resource.data.invitedEmail || ownerOrAdmin(resource.data.businessId));
+      allow update: if signedIn() && (ownerOrAdmin(resource.data.businessId) || (request.auth.token.email == resource.data.invitedEmail && resource.data.status == 'pending' && request.resource.data.businessId == resource.data.businessId && request.resource.data.invitedEmail == resource.data.invitedEmail && request.resource.data.invitedBy == resource.data.invitedBy && request.resource.data.status in ['accepted', 'rejected']));
+      allow delete: if signedIn() && ownerOrAdmin(resource.data.businessId);
+    }
+
     match /businesses/{businessId} {
-      allow read: if isBusinessMember(businessId); allow create: if signedIn() && request.resource.data.businessId == businessId && request.resource.data.ownerId == request.auth.uid && request.resource.data.status == 'active'; allow update: if ownerOrAdmin(businessId); allow delete: if hasRole(businessId, ['owner']);
-      match /members/{userId} { allow read: if isBusinessMember(businessId); allow create: if ownerOrAdmin(businessId) || (signedIn() && userId == request.auth.uid && request.resource.data.uid == request.auth.uid && request.resource.data.status == 'active' && request.resource.data.invitationId != null && exists(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)) && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.businessId == businessId && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.invitedEmail == request.auth.token.email && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending' && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.role == request.resource.data.role); allow update: if ownerOrAdmin(businessId) && resource.data.role != 'owner'; allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner'; }
-      match /settings/{settingId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if ownerOrAdmin(businessId); }
-      // Unified party master. Financially relevant party writes are application-service only.
-      match /parties/{partyId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      // Legacy collections are retained read-only during migration; no new authoritative writes are allowed.
-      match /customers/{customerId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /suppliers/{supplierId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /items/{itemId} { allow read: if isBusinessMember(businessId); allow create: if hasPermissionAction(businessId, 'inventory', 'create', 'inventory'); allow update: if hasPermissionAction(businessId, 'inventory', 'edit', 'inventory'); allow delete: if ownerOrAdmin(businessId) || hasPermissionAction(businessId, 'items', 'delete', 'inventory'); }
-      match /categories/{categoryId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasPermission(businessId, 'inventory'); }
-      match /units/{unitId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasPermission(businessId, 'inventory'); }
-      match /sales/{saleId} { allow read: if hasPermissionAction(businessId, 'sales', 'view', 'sales'); allow create, update, delete: if false; }
-      match /invoices/{invoiceId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /quotations/{quotationId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
-      match /salesOrders/{orderId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
-      match /salesReturns/{returnId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /purchases/{purchaseId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /purchaseOrders/{orderId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'purchases'); allow delete: if ownerOrAdmin(businessId); }
-      match /purchaseReturns/{returnId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /payments/{paymentId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /expenses/{expenseId} { allow read: if hasPermissionAction(businessId, 'expenses', 'view', 'expenses'); allow create, update, delete: if false; }
-      match /stockMovements/{movementId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /stockAdjustments/{adjustmentId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /accounts/{accountId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasRole(businessId, ['owner', 'admin', 'accountant']); }
-      match /financialYears/{financialYearId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /vouchers/{voucherId} { allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
-      match /voucherLines/{lineId} { allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
-      match /voucherSequences/{sequenceId} { allow read: if hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
-      match /accountingDocuments/{documentId} { allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
-      match /partyAllocations/{allocationId} { allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
-      match /returnDocuments/{documentId} { allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
-      match /ledgerEntries/{entryId} { allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
-      match /taxRates/{taxId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasRole(businessId, ['owner', 'admin', 'accountant']); }
-      match /sequences/{sequenceId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
-      match /auditLogs/{logId} { allow read: if ownerOrAdmin(businessId); allow create, update, delete: if false; }
+      allow read: if isBusinessMember(businessId);
+      allow create: if signedIn() && sameBusinessOnCreate(businessId) && request.resource.data.ownerId == request.auth.uid && request.resource.data.status == 'active';
+      allow update: if ownerOrAdmin(businessId) && immutableBusinessId(businessId) && resource.data.ownerId == request.resource.data.ownerId;
+      allow delete: if hasRole(businessId, ['owner']);
+
+      match /members/{userId} {
+        allow read: if isBusinessMember(businessId);
+        allow create: if (ownerOrAdmin(businessId) && sameBusinessOnCreate(businessId) && request.resource.data.uid == userId) || (signedIn() && userId == request.auth.uid && request.resource.data.uid == request.auth.uid && request.resource.data.businessId == businessId && request.resource.data.status == 'active' && request.resource.data.invitationId != null && exists(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)) && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.businessId == businessId && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.invitedEmail == request.auth.token.email && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.status == 'pending' && get(/databases/$(database)/documents/invitations/$(request.resource.data.invitationId)).data.role == request.resource.data.role);
+        allow update: if ownerOrAdmin(businessId) && resource.data.role != 'owner' && resource.data.uid == userId && request.resource.data.uid == userId && resource.data.businessId == businessId && request.resource.data.businessId == businessId;
+        allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
+      }
+      match /settings/{settingId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if ownerOrAdmin(businessId) && sameBusinessOnCreate(businessId); }
+
+      match /parties/{partyId} { allow read: if canReadModule(businessId, 'parties', 'parties'); allow create, update, delete: if false; }
+      match /customers/{customerId} { allow read: if canReadModule(businessId, 'parties', 'parties'); allow create, update, delete: if false; }
+      match /suppliers/{supplierId} { allow read: if canReadModule(businessId, 'parties', 'parties'); allow create, update, delete: if false; }
+
+      match /items/{itemId} {
+        allow read: if canReadModule(businessId, 'inventory', 'inventory') && resource.data.businessId == businessId;
+        allow create: if hasPermissionAction(businessId, 'inventory', 'create', 'inventory') && sameBusinessOnCreate(businessId);
+        allow update: if hasPermissionAction(businessId, 'inventory', 'edit', 'inventory') && immutableBusinessId(businessId);
+        allow delete: if (ownerOrAdmin(businessId) || hasPermissionAction(businessId, 'items', 'delete', 'inventory')) && immutableBusinessId(businessId);
+      }
+      match /categories/{categoryId} { allow read: if canReadModule(businessId, 'inventory', 'inventory'); allow create, update, delete: if hasPermission(businessId, 'inventory') && (request.resource.data.businessId == businessId || resource.data.businessId == businessId); }
+      match /units/{unitId} { allow read: if canReadModule(businessId, 'inventory', 'inventory'); allow create, update, delete: if hasPermission(businessId, 'inventory') && (request.resource.data.businessId == businessId || resource.data.businessId == businessId); }
+
+      match /sales/{saleId} { allow read: if canReadModule(businessId, 'sales', 'sales') && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /invoices/{invoiceId} { allow read: if canReadModule(businessId, 'sales', 'sales') && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /quotations/{quotationId} { allow read: if canReadModule(businessId, 'sales', 'sales'); allow create, update: if hasPermission(businessId, 'sales') && (request.resource.data.businessId == businessId && (resource == null || resource.data.businessId == businessId)); allow delete: if ownerOrAdmin(businessId) && resource.data.businessId == businessId; }
+      match /salesOrders/{orderId} { allow read: if canReadModule(businessId, 'sales', 'sales'); allow create, update: if hasPermission(businessId, 'sales') && (request.resource.data.businessId == businessId && (resource == null || resource.data.businessId == businessId)); allow delete: if ownerOrAdmin(businessId) && resource.data.businessId == businessId; }
+      match /salesReturns/{returnId} { allow read: if canReadModule(businessId, 'sales', 'sales'); allow create, update, delete: if false; }
+      match /purchases/{purchaseId} { allow read: if canReadModule(businessId, 'purchases', 'purchases'); allow create, update, delete: if false; }
+      match /purchaseOrders/{orderId} { allow read: if canReadModule(businessId, 'purchases', 'purchases'); allow create, update: if hasPermission(businessId, 'purchases') && request.resource.data.businessId == businessId && (resource == null || resource.data.businessId == businessId); allow delete: if ownerOrAdmin(businessId) && resource.data.businessId == businessId; }
+      match /purchaseReturns/{returnId} { allow read: if canReadModule(businessId, 'purchases', 'purchases'); allow create, update, delete: if false; }
+
+      match /payments/{paymentId} { allow read: if canReadModule(businessId, 'payments', 'payments'); allow create, update, delete: if false; }
+      match /expenses/{expenseId} { allow read: if canReadModule(businessId, 'expenses', 'expenses'); allow create, update, delete: if false; }
+      match /stockMovements/{movementId} { allow read: if canReadModule(businessId, 'inventory', 'inventory'); allow create, update, delete: if false; }
+      match /stockAdjustments/{adjustmentId} { allow read: if canReadModule(businessId, 'inventory', 'inventory'); allow create, update, delete: if false; }
+
+      match /accounts/{accountId} {
+        allow read: if isBusinessMember(businessId) && resource.data.businessId == businessId;
+        allow create: if hasRole(businessId, ['owner', 'admin', 'accountant']) && sameBusinessOnCreate(businessId) && request.resource.data.systemAccount == false;
+        allow update: if hasRole(businessId, ['owner', 'admin', 'accountant']) && immutableBusinessId(businessId) && resource.data.systemAccount == false && request.resource.data.systemAccount == false;
+        allow delete: if hasRole(businessId, ['owner', 'admin']) && resource.data.businessId == businessId && resource.data.systemAccount == false;
+      }
+      match /financialYears/{financialYearId} { allow read: if isBusinessMember(businessId) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /vouchers/{voucherId} { allow read: if (hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant'])) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /voucherLines/{lineId} { allow read: if (hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant'])) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /voucherSequences/{sequenceId} { allow read: if hasRole(businessId, ['owner', 'admin', 'accountant']) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /accountingDocuments/{documentId} { allow read: if (hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant'])) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /partyAllocations/{allocationId} { allow read: if (hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant'])) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /returnDocuments/{documentId} { allow read: if (hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant'])) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /ledgerEntries/{entryId} { allow read: if (hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant'])) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /taxRates/{taxId} { allow read: if isBusinessMember(businessId) && resource.data.businessId == businessId; allow create: if hasRole(businessId, ['owner', 'admin', 'accountant']) && sameBusinessOnCreate(businessId); allow update: if hasRole(businessId, ['owner', 'admin', 'accountant']) && immutableBusinessId(businessId); allow delete: if hasRole(businessId, ['owner', 'admin']) && resource.data.businessId == businessId; }
+      match /sequences/{sequenceId} { allow read: if isBusinessMember(businessId) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /auditLogs/{logId} { allow read: if ownerOrAdmin(businessId) && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /bankAccounts/{accountId} { allow read: if hasPermissionAction(businessId, 'cashBank', 'view', 'cashBank') && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /cashAccounts/{accountId} { allow read: if hasPermissionAction(businessId, 'cashBank', 'view', 'cashBank') && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /warehouses/{warehouseId} { allow read: if canReadModule(businessId, 'inventory', 'inventory') && resource.data.businessId == businessId; allow create, update, delete: if false; }
+      match /productions/{productionId} { allow read: if hasPermissionAction(businessId, 'inventory', 'inventory', 'inventory') && resource.data.businessId == businessId; allow create, update, delete: if false; }
     }
     match /{document=**} { allow read, write: if false; }
   }
