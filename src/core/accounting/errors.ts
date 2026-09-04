@@ -12,6 +12,13 @@ export class ValidationError extends AccountingError {
   }
 }
 
+export class AuthorizationError extends AccountingError {
+  constructor(message: string) {
+    super(message, "FORBIDDEN");
+    this.name = "AuthorizationError";
+  }
+}
+
 export class UnbalancedVoucherError extends AccountingError {
   constructor(debit: number, credit: number) {
     super(`Voucher is not balanced. Debit=${debit}, Credit=${credit}`, "UNBALANCED_VOUCHER");

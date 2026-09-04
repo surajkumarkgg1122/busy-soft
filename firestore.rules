@@ -46,33 +46,37 @@ service cloud.firestore {
         allow delete: if ownerOrAdmin(businessId) && resource.data.role != 'owner';
       }
       match /settings/{settingId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if ownerOrAdmin(businessId); }
+      // Party/item master data remains client-manageable under permissions. Financial balances and stock are not.
       match /customers/{customerId} {
         allow read: if isBusinessMember(businessId);
         allow create: if hasPermissionAction(businessId, 'parties', 'create', 'sales');
-        allow update: if hasPermissionAction(businessId, 'parties', 'edit', 'sales') || ((hasPermissionAction(businessId, 'sales', 'create', 'sales') || hasPermissionAction(businessId, 'sales', 'edit', 'sales') || hasPermissionAction(businessId, 'sales', 'delete', 'sales')) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'updatedAt']));
+        allow update: if hasPermissionAction(businessId, 'parties', 'edit', 'sales');
         allow delete: if ownerOrAdmin(businessId) || hasPermissionAction(businessId, 'parties', 'delete', 'sales');
       }
       match /suppliers/{supplierId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'purchases'); allow delete: if ownerOrAdmin(businessId); }
       match /items/{itemId} {
         allow read: if isBusinessMember(businessId);
         allow create: if hasPermissionAction(businessId, 'inventory', 'create', 'inventory');
-        allow update: if hasPermissionAction(businessId, 'inventory', 'edit', 'inventory') || ((hasPermissionAction(businessId, 'sales', 'create', 'sales') || hasPermissionAction(businessId, 'sales', 'edit', 'sales') || hasPermissionAction(businessId, 'sales', 'delete', 'sales')) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt']));
+        allow update: if hasPermissionAction(businessId, 'inventory', 'edit', 'inventory');
         allow delete: if ownerOrAdmin(businessId) || hasPermissionAction(businessId, 'items', 'delete', 'inventory');
       }
       match /categories/{categoryId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasPermission(businessId, 'inventory'); }
       match /units/{unitId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasPermission(businessId, 'inventory'); }
+
+      // Posted/authoritative financial documents are application-service owned. Clients may read but never write them.
       match /sales/{saleId} { allow read: if hasPermissionAction(businessId, 'sales', 'view', 'sales'); allow create, update, delete: if false; }
-      match /invoices/{invoiceId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
+      match /invoices/{invoiceId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
       match /quotations/{quotationId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
       match /salesOrders/{orderId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
-      match /salesReturns/{returnId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'sales'); allow delete: if ownerOrAdmin(businessId); }
-      match /purchases/{purchaseId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'purchases'); allow delete: if ownerOrAdmin(businessId); }
+      match /salesReturns/{returnId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
+      match /purchases/{purchaseId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
       match /purchaseOrders/{orderId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'purchases'); allow delete: if ownerOrAdmin(businessId); }
-      match /purchaseReturns/{returnId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'purchases'); allow delete: if ownerOrAdmin(businessId); }
-      match /payments/{paymentId} { allow read: if isBusinessMember(businessId); allow create, update: if hasPermission(businessId, 'payments'); allow delete: if ownerOrAdmin(businessId); }
-      match /expenses/{expenseId} { allow read: if hasPermissionAction(businessId, 'expenses', 'view', 'expenses'); allow create: if hasPermissionAction(businessId, 'expenses', 'create', 'expenses'); allow update: if hasPermissionAction(businessId, 'expenses', 'edit', 'expenses'); allow delete: if hasPermissionAction(businessId, 'expenses', 'delete', 'expenses'); }
-      match /stockMovements/{movementId} { allow read: if isBusinessMember(businessId); allow create: if hasPermission(businessId, 'inventory'); allow update, delete: if ownerOrAdmin(businessId); }
-      match /stockAdjustments/{adjustmentId} { allow read: if isBusinessMember(businessId); allow create: if hasPermission(businessId, 'inventory'); allow update, delete: if ownerOrAdmin(businessId); }
+      match /purchaseReturns/{returnId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
+      match /payments/{paymentId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
+      match /expenses/{expenseId} { allow read: if hasPermissionAction(businessId, 'expenses', 'view', 'expenses'); allow create, update, delete: if false; }
+      match /stockMovements/{movementId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
+      match /stockAdjustments/{adjustmentId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
+
       match /accounts/{accountId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasRole(businessId, ['owner', 'admin', 'accountant']); }
       match /financialYears/{financialYearId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
       match /vouchers/{voucherId} { allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
@@ -83,8 +87,7 @@ service cloud.firestore {
       match /returnDocuments/{documentId} { allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']); allow create, update, delete: if false; }
       match /ledgerEntries/{entryId} {
         allow read: if hasPermissionAction(businessId, 'reports', 'view', 'reports') || hasRole(businessId, ['owner', 'admin', 'accountant']);
-        allow create, update: if false;
-        allow delete: if false;
+        allow create, update, delete: if false;
       }
       match /taxRates/{taxId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if hasRole(businessId, ['owner', 'admin', 'accountant']); }
       match /sequences/{sequenceId} { allow read: if isBusinessMember(businessId); allow create, update, delete: if false; }
