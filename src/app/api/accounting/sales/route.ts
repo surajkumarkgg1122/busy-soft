@@ -58,12 +58,24 @@ export async function POST(request:Request){
       bankAccountName=String(bank.displayName??bank.bankName??"");
       if(!bankAccountName)return jsonError("Selected bank account has no name.",400);
     }
+    const customerId=typeof body.customerId==="string"&&body.customerId?body.customerId:undefined;
+    let partyLedgerAccountId="acct-debtors";
+    if(customerId){
+      const partySnap=await businessRef.collection("parties").doc(customerId).get();
+      if(!partySnap.exists)return jsonError("Selected customer does not exist.",400);
+      const party=partySnap.data() as {businessId?:string;kind?:string;status?:string;ledgerAccountId?:string;receivableLedgerAccountId?:string};
+      if(party.businessId!==businessId||!(["customer","both"].includes(String(party.kind))))return jsonError("Selected party is not a customer of this business.",400);
+      if(party.status!=="active")return jsonError("Selected customer is inactive.",400);
+      partyLedgerAccountId=String(party.receivableLedgerAccountId??party.ledgerAccountId??"");
+      if(!partyLedgerAccountId)return jsonError("Selected customer has no receivable ledger account.",400);
+    }
     const repo=createAdminAccountingRepository(businessId);
     const idempotencyKey=String(body.idempotencyKey??`sale-${businessId}-${crypto.randomUUID()}`);
     const documentId=String(body.documentId??"")||undefined;
     const rawPayload=body.documentPayload&&typeof body.documentPayload==="object"?body.documentPayload as Record<string,unknown>:{};
     const documentPayload={...rawPayload,bankAccountName:bankAccountName??null,bankAccountId:selectedBankAccountId??null,bankLedgerAccountId:bankLedgerAccountId??null};
-    const result=await createSale({repo,ids:{next:p=>`${p}-${crypto.randomUUID()}`},clock:{now:()=>new Date().toISOString()}},{businessId,userId:token.uid,financialYearId,idempotencyKey,permissions:["SALE_CREATE" as AccountingPermission]},{date,customerId:typeof body.customerId==="string"&&body.customerId?body.customerId:undefined,paymentMode,grossValue:Number(body.grossValue),discountPercent:Number(body.discountPercent??0),discountAmount:Number(body.discountAmount??0),paidAmount:Number(body.paidAmount??0),bankAccountId:paymentMode==="bank"?bankLedgerAccountId:undefined,taxRate:Number(body.taxRate??0),intraState:Boolean(body.intraState),cessRate:Number(body.cessRate??0),accountMap:{party:"acct-debtors",sales:"acct-sales",cash:"acct-cash",bank:bankLedgerAccountId||"acct-bank",outputCgst:"acct-output-cgst",outputSgst:"acct-output-sgst",outputIgst:"acct-output-igst",outputCess:"acct-output-cess",inventory:"acct-inventory",cogs:"acct-cogs"},itemMovements:Array.isArray(body.itemMovements)?body.itemMovements as Array<{itemId:string;quantity:number;warehouseId?:string}>:[],narration:typeof body.narration==="string"?body.narration:undefined,documentId,documentPayload});
+    const paidAmount=Object.prototype.hasOwnProperty.call(body,"paidAmount")?Number(body.paidAmount):undefined;
+    const result=await createSale({repo,ids:{next:p=>`${p}-${crypto.randomUUID()}`},clock:{now:()=>new Date().toISOString()}},{businessId,userId:token.uid,financialYearId,idempotencyKey,permissions:["SALE_CREATE" as AccountingPermission]},{date,customerId,paymentMode,grossValue:Number(body.grossValue),discountPercent:Number(body.discountPercent??0),discountAmount:Number(body.discountAmount??0),paidAmount,bankAccountId:paymentMode==="bank"?bankLedgerAccountId:undefined,taxRate:Number(body.taxRate??0),intraState:Boolean(body.intraState),cessRate:Number(body.cessRate??0),accountMap:{party:partyLedgerAccountId,sales:"acct-sales",cash:"acct-cash",bank:bankLedgerAccountId||"acct-bank",outputCgst:"acct-output-cgst",outputSgst:"acct-output-sgst",outputIgst:"acct-output-igst",outputCess:"acct-output-cess",inventory:"acct-inventory",cogs:"acct-cogs"},itemMovements:Array.isArray(body.itemMovements)?body.itemMovements as Array<{itemId:string;quantity:number;warehouseId?:string;itemType?:"product"|"service";batchId?:string;serialNumbers?:string[]}>:[],narration:typeof body.narration==="string"?body.narration:undefined,documentId,documentPayload});
     return NextResponse.json({success:true,result});
   }catch(error){
     const message=error instanceof Error?error.message:"Could not post sale.";
