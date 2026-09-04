@@ -2,6 +2,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { BusinessProvider } from "../context/BusinessContext";
 import KeyboardShortcuts from "../components/shortcuts/KeyboardShortcuts";
+import SyncBootstrap from "./components/offline/SyncBootstrap";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,6 +24,7 @@ export default function RootLayout({ children }) {
     <html lang="en" className="light">
       <body className="main">
         <BusinessProvider>
+          <SyncBootstrap />
           {children}
           <KeyboardShortcuts />
         </BusinessProvider>
