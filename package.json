@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:critical": "vitest run src/core/accounting/__tests__/productionWorkflowQa.test.ts src/core/accounting/__tests__/integrityCheckerGate.test.ts src/core/accounting/__tests__/accountingCoreHardening.test.ts src/core/accounting/__tests__/firestoreRulesSecurity.test.ts src/core/accounting/__tests__/documentLifecycleHardening.test.ts src/core/accounting/__tests__/partyEngineHardening.test.ts src/core/accounting/__tests__/inventoryEngineHardening.test.ts src/core/accounting/__tests__/gstHardening.test.ts",
+    "test:critical": "vitest run src/core/accounting/__tests__/productionWorkflowQa.test.ts src/core/accounting/__tests__/invoicePresentationHardening.test.ts src/core/accounting/__tests__/integrityCheckerGate.test.ts src/core/accounting/__tests__/accountingCoreHardening.test.ts src/core/accounting/__tests__/firestoreRulesSecurity.test.ts src/core/accounting/__tests__/documentLifecycleHardening.test.ts src/core/accounting/__tests__/partyEngineHardening.test.ts src/core/accounting/__tests__/inventoryEngineHardening.test.ts src/core/accounting/__tests__/gstHardening.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
