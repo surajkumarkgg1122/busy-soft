@@ -53,6 +53,7 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
   if (key.length < 16 || key.length > 128) throw new Error("Offline idempotency key must be 16–128 characters.");
   const operationId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const payload = { ...input.payload, businessId: input.businessId, financialYearId: input.financialYearId, idempotencyKey: key };
   const ctx: CommandContext = {
     businessId: input.businessId,
     financialYearId: input.financialYearId,
@@ -71,7 +72,7 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
     entityType: input.entityType ?? input.commandType,
     entityId: input.entityId,
     commandType: input.commandType,
-    payload: input.payload,
+    payload,
     status: "PENDING",
     retryCount: 0,
     createdAt: now,
@@ -88,14 +89,9 @@ export async function executeOfflineCommand(input: OfflineCommandInput): Promise
     db.syncOperations, db.syncAttempts, db.conflicts, db.syncCheckpoints, db.projections,
   ], async () => {
     const existing = await db.syncOperations.where("commandId").equals(operation.commandId).first();
-    if (existing) {
-      if (existing.payloadFingerprint && existing.payloadFingerprint !== operation.payloadFingerprint) {
-        throw new Error("Command identity is already associated with a different payload.");
-      }
-      return { value: existing.serverResult ?? { operationId: existing.operationId, status: existing.status }, idempotencyKey: key };
-    }
+    if (existing) return { value: existing.serverResult ?? { operationId: existing.operationId, status: existing.status }, idempotencyKey: key };
     await db.syncOperations.put(operation);
-    const result = await dispatch(input.commandType, repo, ctx, { ...input.payload, idempotencyKey: key });
+    const result = await dispatch(input.commandType, repo, ctx, payload);
     const value = result.value as Record<string, unknown>;
     const voucher = value && typeof value === "object" && value.voucher && typeof value.voucher === "object" ? value.voucher as Record<string, unknown> : undefined;
     const entityId = input.entityId ?? (voucher?.id as string | undefined);
