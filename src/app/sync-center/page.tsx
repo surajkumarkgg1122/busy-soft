@@ -2,56 +2,25 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { requireLocalDb } from "@/infrastructure/local/localDb";
-import { syncPendingOperations } from "@/infrastructure/local/syncEngine";
+import { requireLocalDb, type ConflictRow, type SyncOperationRow } from "@/infrastructure/local/localDb";
+import { retryFailedOperations, syncPendingOperations } from "@/infrastructure/local/syncEngine";
 import { useSyncState } from "@/infrastructure/local/syncStore";
 
 export default function SyncCenterPage() {
   const state = useSyncState();
-  const [operations, setOperations] = useState<Array<{ operationId: string; commandType: string; status: string; retryCount: number; lastError?: string; createdAt: string }>>([]);
-
-  const load = async () => {
-    const db = requireLocalDb();
-    const rows = await db.syncOperations.orderBy("createdAt").reverse().limit(100).toArray();
-    setOperations(rows.map(row => ({ operationId: row.operationId, commandType: row.commandType, status: row.status, retryCount: row.retryCount, lastError: row.lastError, createdAt: row.createdAt })));
-  };
-
-  useEffect(() => { void load(); }, [state.pendingCount, state.failedCount, state.conflictCount, state.syncStatus]);
-  const syncNow = async () => { await syncPendingOperations(); await load(); };
-
-  return (
-    <main className="min-h-screen bg-[#f5f7fa] p-6 text-[#182230]">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-6 flex items-center justify-between gap-4">
-          <div><Link href="/" className="text-sm text-[#64748b] hover:text-[#182230]">← Back</Link><h1 className="mt-2 text-2xl font-bold">Sync Center</h1><p className="mt-1 text-sm text-[#64748b]">Durable local operations and cloud synchronization diagnostics.</p></div>
-          <button type="button" onClick={() => void syncNow()} className="rounded-lg bg-[#182230] px-4 py-2 text-sm font-semibold text-white hover:bg-[#243247]">Sync Now</button>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-4">
-          <Card title="Connection" value={state.connectionStatus} />
-          <Card title="Pending" value={String(state.pendingCount)} />
-          <Card title="Failed" value={String(state.failedCount)} />
-          <Card title="Conflicts" value={String(state.conflictCount)} />
-        </div>
-
-        <section className="mt-6 overflow-hidden rounded-xl border border-[#dbe2ea] bg-white">
-          <div className="flex items-center justify-between border-b border-[#e5eaf0] px-5 py-4"><div><h2 className="font-semibold">Recent operations</h2><p className="text-xs text-[#718198]">Financial sync records are durable and cannot be deleted from this screen.</p></div><span className="text-xs text-[#718198]">Last sync: {state.lastSuccessfulSync ? new Date(state.lastSuccessfulSync).toLocaleString() : "Never"}</span></div>
-          <div className="divide-y divide-[#edf1f5]">
-            {!operations.length ? <p className="px-5 py-8 text-sm text-[#718198]">No synchronization operations have been recorded on this device.</p> : operations.map(operation => (
-              <div key={operation.operationId} className="grid gap-2 px-5 py-4 md:grid-cols-[1fr_140px_80px_2fr] md:items-center">
-                <div><p className="text-sm font-medium">{operation.commandType}</p><p className="text-[11px] text-[#8392a8]">{operation.operationId}</p></div>
-                <span className="text-xs font-semibold">{operation.status}</span>
-                <span className="text-xs text-[#64748b]">#{operation.retryCount}</span>
-                <div className="text-xs text-[#64748b]">{operation.lastError ?? new Date(operation.createdAt).toLocaleString()}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-    </main>
-  );
+  const [operations, setOperations] = useState<SyncOperationRow[]>([]);
+  const [conflicts, setConflicts] = useState<ConflictRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  const load = async () => { try { const db=requireLocalDb(); const [ops,rows]=await Promise.all([db.syncOperations.orderBy("createdAt").reverse().limit(100).toArray(),db.conflicts.orderBy("createdAt").reverse().limit(50).toArray()]); setOperations(ops); setConflicts(rows.filter(r=>r.status==="OPEN")); } catch { setOperations([]); setConflicts([]); } };
+  useEffect(()=>{ void load(); const timer=window.setInterval(()=>void load(),5000); return()=>window.clearInterval(timer); },[state.pendingCount,state.failedCount,state.conflictCount,state.syncStatus]);
+  const syncNow=async()=>{setBusy(true);try{await syncPendingOperations();await load();}finally{setBusy(false);}};
+  const retryAll=async()=>{setBusy(true);try{await retryFailedOperations();await load();}finally{setBusy(false);}};
+  return <main className="min-h-screen bg-[#f5f7fa] p-6 text-[#182230]"><div className="mx-auto max-w-6xl">
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-4"><div><Link href="/" className="text-sm text-[#64748b] hover:text-[#182230]">← Back</Link><h1 className="mt-2 text-2xl font-bold">Sync Center</h1><p className="mt-1 text-sm text-[#64748b]">Durable local operations and cloud synchronization diagnostics.</p></div><div className="flex gap-2"><button disabled={busy} type="button" onClick={()=>void syncNow()} className="rounded-lg bg-[#182230] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy?"Working…":"Sync Now"}</button><button disabled={busy||!state.failedCount} type="button" onClick={()=>void retryAll()} className="rounded-lg border border-[#dbe2ea] bg-white px-4 py-2 text-sm font-semibold disabled:opacity-50">Retry All</button></div></div>
+    <div className="grid gap-4 md:grid-cols-5"><Card title="Connection" value={state.connectionStatus}/><Card title="Pending" value={String(state.pendingCount)}/><Card title="Syncing" value={String(state.syncingCount)}/><Card title="Failed" value={String(state.failedCount)}/><Card title="Conflicts" value={String(state.conflictCount)}/></div>
+    <div className="mt-4 rounded-xl border border-[#dbe2ea] bg-white p-4 text-sm"><div className="flex flex-wrap justify-between gap-3"><span>Last successful sync: <b>{state.lastSuccessfulSync?new Date(state.lastSuccessfulSync).toLocaleString():"Never"}</b></span><span>Last attempt: <b>{state.lastSyncAttempt?new Date(state.lastSyncAttempt).toLocaleString():"Never"}</b></span></div>{state.lastSyncError&&<p className="mt-2 text-xs font-medium text-red-600">{state.lastSyncError}</p>}</div>
+    <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_360px]"><section className="overflow-hidden rounded-xl border border-[#dbe2ea] bg-white"><div className="border-b border-[#e5eaf0] px-5 py-4"><h2 className="font-semibold">Recent operations</h2><p className="text-xs text-[#718198]">Financial sync records are durable and cannot be deleted from this screen.</p></div><div className="divide-y divide-[#edf1f5]">{!operations.length?<p className="px-5 py-8 text-sm text-[#718198]">No synchronization operations have been recorded on this device.</p>:operations.map(operation=><div key={operation.operationId} className="grid gap-2 px-5 py-4 md:grid-cols-[1fr_110px_70px_2fr] md:items-center"><div><p className="text-sm font-medium">{operation.commandType}</p><p className="text-[11px] text-[#8392a8]">{operation.entityType} · {operation.idempotencyKey}</p></div><span className={`text-xs font-semibold ${operation.status==="SYNCED"?"text-green-600":operation.status==="FAILED"?"text-red-600":operation.status==="CONFLICT"?"text-orange-600":"text-slate-600"}`}>{operation.status}</span><span className="text-xs text-[#64748b]">#{operation.retryCount}</span><div className="text-xs text-[#64748b]">{operation.lastError??new Date(operation.updatedAt).toLocaleString()}</div></div>)}</div></section>
+    <section className="overflow-hidden rounded-xl border border-[#dbe2ea] bg-white"><div className="border-b border-[#e5eaf0] px-5 py-4"><h2 className="font-semibold">Attention required</h2><p className="text-xs text-[#718198]">Posted financial conflicts require explicit resolution; they are never silently overwritten.</p></div>{!conflicts.length?<p className="px-5 py-8 text-sm text-[#718198]">No open conflicts.</p>:conflicts.map(conflict=><div key={conflict.id} className="border-b border-[#edf1f5] px-5 py-4"><p className="text-sm font-semibold text-orange-700">{conflict.entityType}</p><p className="mt-1 text-xs text-[#64748b]">{conflict.reason}</p><p className="mt-2 text-[10px] text-[#8392a8]">Operation: {conflict.operationId}</p></div>)}</section></div>
+  </div></main>;
 }
-
-function Card({ title, value }: { title: string; value: string }) {
-  return <div className="rounded-xl border border-[#dbe2ea] bg-white p-4"><p className="text-xs font-medium uppercase tracking-wide text-[#8392a8]">{title}</p><p className="mt-2 text-lg font-bold">{value}</p></div>;
-}
+function Card({title,value}:{title:string;value:string}){return <div className="rounded-xl border border-[#dbe2ea] bg-white p-4"><p className="text-xs font-medium uppercase tracking-wide text-[#8392a8]">{title}</p><p className="mt-2 text-lg font-bold">{value}</p></div>}
